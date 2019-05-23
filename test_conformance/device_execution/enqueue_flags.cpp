@@ -607,7 +607,7 @@ static const char* enqueue_flags_wait_work_group_event_local[] =
     NL, ""
     NL, "  if((index + 1) == BITS_DEPTH)"
     NL, "  {"
-    NL, "    barrier(CLK_LOCAL_MEM_FENCE);"
+    NL, "    barrier(CLK_GLOBAL_MEM_FENCE);"
     NL, ""
     NL, "    if(lid == 0)"
     NL, "    {"
