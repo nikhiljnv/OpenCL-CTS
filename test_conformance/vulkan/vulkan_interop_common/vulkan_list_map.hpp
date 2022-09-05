@@ -340,6 +340,7 @@ VulkanWrapper &VulkanList<VulkanWrapper, VulkanNative>::operator[](size_t idx)
         // CHECK_LT(idx, m_wrapperList.size());
         return m_wrapperList[idx].get();
     }
+    return 0;
 }
 
 template <class VulkanWrapper, class VulkanNative>
