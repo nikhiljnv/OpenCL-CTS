@@ -38,6 +38,8 @@ typedef unsigned char UINT8;
 #define __in_bcount(size)
 #define __deref_out
 #endif
+#define _WIN32_WINNT 0x0601
+#include <d3d9.h>
 #include <dxvahd.h>
 #include <tchar.h>
 #endif

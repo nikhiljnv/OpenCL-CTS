@@ -85,6 +85,10 @@
 #  endif
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* -------------------------- WGL_3DFX_multisample ------------------------- */
 
 #ifndef WGL_3DFX_multisample
@@ -1433,6 +1437,10 @@ GLEWAPI GLboolean GLEWAPIENTRY wglewIsSupported (const char *name);
 #endif
 
 GLEWAPI GLboolean GLEWAPIENTRY wglewGetExtension (const char *name);
+
+#ifdef __cplusplus
+}
+#endif
 
 #undef GLEWAPI
 

@@ -14,6 +14,9 @@
 // limitations under the License.
 //
 #include "testBase.h"
+#if !defined (_MSC_VER)
+    #include <unistd.h>
+#endif // !_MSC_VER
 
 static volatile cl_int sDestructorIndex;
 

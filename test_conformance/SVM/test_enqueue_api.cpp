@@ -19,9 +19,9 @@
 #include <vector>
 #include <atomic>
 
-#if !defined(_WIN32)
-#include <unistd.h>
-#endif
+#if !defined (_MSC_VER)
+    #include <unistd.h>
+#endif // !_MSC_VER
 
 typedef struct
 {

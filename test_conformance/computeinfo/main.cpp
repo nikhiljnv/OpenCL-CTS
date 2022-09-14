@@ -23,6 +23,13 @@
 #include "harness/errorHelpers.h"
 #include "harness/kernelHelpers.h"
 
+#if defined(_MSC_VER) || defined(__BORLANDC__)
+    #define PRIu64 "I64u"
+    #define PRIX64 "I64x"
+#elif !defined(__linux) || !defined(__linux__) || !defined(linux)
+    #define PRIu64 "llu"
+    #define PRIX64 "llx"
+#endif
 static int dump_supported_formats;
 
 typedef struct
