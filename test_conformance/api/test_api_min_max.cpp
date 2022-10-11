@@ -586,6 +586,7 @@ int test_min_max_mem_alloc_size(cl_device_id deviceID, cl_context context,
     if (memSize > (cl_ulong)SIZE_MAX)
     {
         memSize = (cl_ulong)SIZE_MAX;
+        maxAllocSize = (cl_ulong)SIZE_MAX;
     }
 
     if (maxAllocSize < requiredAllocSize)

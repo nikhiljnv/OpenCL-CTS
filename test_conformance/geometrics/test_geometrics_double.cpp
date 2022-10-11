@@ -165,6 +165,7 @@ int test_geom_cross_double(cl_device_id deviceID, cl_context context, cl_command
 
     if (maxGlobalMemSize > (cl_ulong)SIZE_MAX) {
       maxGlobalMemSize = (cl_ulong)SIZE_MAX;
+      maxAllocSize = (cl_ulong)SIZE_MAX;
     }
 
     unsigned int size;
