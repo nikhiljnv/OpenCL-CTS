@@ -18,6 +18,12 @@
 #include "harness/typeWrappers.h"
 #include "harness/clImageHelper.h"
 #include "harness/imageHelpers.h"
+
+typedef int (*semaphoreCommonTestfn)(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+
 extern float    calculate_ulperror(float a, float b);
 
 extern int        test_load_single_kernel(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements);
@@ -241,3 +247,48 @@ extern int test_semaphores_invalid_command(cl_device_id deviceID,
                                            cl_context context,
                                            cl_command_queue queue,
                                            int num_elements);
+
+extern int test_semaphores_common_simple_1(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_simple_2(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_reuse(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_cross_queues(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_multi_signal(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_multi_wait(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_queries(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_order_1(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_order_2(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_order_3(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);
+extern int test_semaphores_common_invalid_command(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list);

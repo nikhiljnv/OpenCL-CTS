@@ -714,10 +714,23 @@ cl_mem clExternalMemoryImage::getExternalMemoryImage()
 
 clExternalMemoryImage::~clExternalMemoryImage()
 {
+#if defined(_WIN32) || defined(_WIN64)
+    if (handle) {
+        CloseHandle(handle);
+    }
+#endif
     clReleaseMemObject(m_externalMemory);
 }
 
-clExternalMemory::~clExternalMemory() { clReleaseMemObject(m_externalMemory); }
+clExternalMemory::~clExternalMemory()
+{
+#if defined(_WIN32) || defined(_WIN64)
+    if (handle) {
+        CloseHandle(handle);
+    }
+#endif
+    clReleaseMemObject(m_externalMemory);
+}
 
 clExternalMemoryImage::clExternalMemoryImage() {}
 

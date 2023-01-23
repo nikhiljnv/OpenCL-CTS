@@ -14,6 +14,9 @@
 // limitations under the License.
 //
 
+#ifdef _WIN32
+#define NOMINMAX
+#endif
 
 #include <algorithm>
 #include "vulkan_list_map.hpp"
@@ -84,14 +87,12 @@ VulkanQueueFamilyToQueueCountMap::VulkanQueueFamilyToQueueCountMap(
         getVulkanInstance().getPhysicalDeviceList();
     for (size_t pdIdx = 0; pdIdx < physicalDeviceList.size(); pdIdx++)
     {
-        maxQueueFamilyCount = std::max(
-            maxQueueFamilyCount,
-            (uint32_t)physicalDeviceList[pdIdx].getQueueFamilyList().size());
-    }
-
-    for (uint32_t qfIdx = 0; qfIdx < maxQueueFamilyCount; qfIdx++)
-    {
-        insert(qfIdx, numQueuesPerFamily);
+        const VulkanQueueFamilyList &queueFamilyList =
+            physicalDeviceList[pdIdx].getQueueFamilyList();
+        for (uint32_t qfIdx = 0; qfIdx < queueFamilyList.size(); qfIdx++)
+        {
+            insert(queueFamilyList[qfIdx], numQueuesPerFamily);
+        }
     }
 }
 

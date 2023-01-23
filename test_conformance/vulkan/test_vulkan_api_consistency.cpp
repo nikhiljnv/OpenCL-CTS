@@ -32,6 +32,132 @@
 #include "harness/testHarness.h"
 #include "harness/typeWrappers.h"
 #include "harness/deviceInfo.h"
+#include "../api/procs.h"
+
+static std::vector<cl_semaphore_properties_khr> create_vulkan_external_sema_props(
+    cl_device_id deviceID, VulkanSemaphore &vkSemaphore,
+    VulkanExternalSemaphoreHandleType vkExternalSemaphoreHandleType)
+{
+    cl_int errNum = CL_SUCCESS;
+    void* handle = NULL;
+    int fd = ~0;
+
+    std::vector<cl_semaphore_properties_khr> sema_props{
+        (cl_semaphore_properties_khr)CL_SEMAPHORE_TYPE_KHR,
+        (cl_semaphore_properties_khr)CL_SEMAPHORE_TYPE_BINARY_KHR,
+    };
+
+    switch (vkExternalSemaphoreHandleType)
+    {
+#ifdef _WIN32
+        case VULKAN_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_NT:
+            handle = vkSemaphore.getHandle(vkExternalSemaphoreHandleType);
+            errNum = check_external_semaphore_handle_type(
+                deviceID, CL_SEMAPHORE_HANDLE_OPAQUE_WIN32_KHR);
+            sema_props.push_back((cl_semaphore_properties_khr)
+                                      CL_SEMAPHORE_HANDLE_OPAQUE_WIN32_KHR);
+            sema_props.push_back((cl_semaphore_properties_khr)handle);
+            break;
+        case VULKAN_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_KMT:
+            handle = vkSemaphore.getHandle(vkExternalSemaphoreHandleType);
+            errNum = check_external_semaphore_handle_type(
+                deviceID, CL_SEMAPHORE_HANDLE_OPAQUE_WIN32_KMT_KHR);
+            sema_props.push_back((cl_semaphore_properties_khr)
+                                      CL_SEMAPHORE_HANDLE_OPAQUE_WIN32_KMT_KHR);
+            sema_props.push_back((cl_semaphore_properties_khr)handle);
+            break;
+#else
+        case VULKAN_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD:
+            fd =
+                (int)vkSemaphore.getHandle(vkExternalSemaphoreHandleType);
+            errNum = check_external_semaphore_handle_type(
+                deviceID, CL_SEMAPHORE_HANDLE_OPAQUE_FD_KHR);
+            sema_props.push_back(
+                (cl_semaphore_properties_khr)CL_SEMAPHORE_HANDLE_OPAQUE_FD_KHR);
+            sema_props.push_back((cl_semaphore_properties_khr)fd);
+            break;
+#endif
+        default: log_error("Unsupported external memory handle type\n"); break;
+    }
+    if (errNum != CL_SUCCESS)
+    {
+        throw std::runtime_error(
+            "Unsupported external sempahore handle type\n ");
+    }
+
+    sema_props.push_back(
+        (cl_semaphore_properties_khr)CL_DEVICE_HANDLE_LIST_KHR);
+    sema_props.push_back((cl_semaphore_properties_khr)deviceID);
+    sema_props.push_back(
+        (cl_semaphore_properties_khr)CL_DEVICE_HANDLE_LIST_END_KHR);
+    sema_props.push_back(0);
+
+    return sema_props;
+}
+
+static int test_external_semaphore_helper(
+    semaphoreCommonTestfn func, cl_device_id deviceID,
+    int num_sema_props, cl_command_queue_properties queue_props)
+{
+#ifdef _WIN32
+    if (!is_extension_available(deviceID, "cl_khr_external_semaphore_win32"))
+    {
+        log_info("cl_khr_external_semaphore_win32 is not supported "
+                 "on this platoform. Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
+#else
+    if (!is_extension_available(deviceID,
+                                "cl_khr_external_semaphore_opaque_fd"))
+    {
+        log_info("cl_khr_external_semaphore_opaque_fd is not supported "
+                 "on this platoform. Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
+#endif
+
+    VulkanDevice vkDevice;
+    cl_int errNum = CL_SUCCESS;
+    cl_platform_id platform = NULL;
+    clContextWrapper context;
+    std::vector<std::vector<cl_semaphore_properties_khr>> semaPropsList(num_sema_props);
+    std::vector<VulkanSemaphore *> vkSemaphoreList(num_sema_props);
+    
+    errNum = clGetPlatformIDs(1, &platform, NULL);
+    test_error(errNum, "Failed to get platform Id");
+
+    cl_context_properties contextProperties[] = {
+        CL_CONTEXT_PLATFORM,
+        (cl_context_properties)platform,
+        0
+    };
+
+    context = clCreateContextFromType(contextProperties, CL_DEVICE_TYPE_GPU,
+                                      NULL, NULL, &errNum);
+    test_error(errNum, "Unable to create context with properties");
+
+    VulkanExternalSemaphoreHandleType vkExternalSemaphoreHandleType =
+        getSupportedVulkanExternalSemaphoreHandleTypeList()[0];
+
+    for (int i = 0; i < num_sema_props; i++) {
+        vkSemaphoreList[i] =
+            new VulkanSemaphore(vkDevice, vkExternalSemaphoreHandleType);
+        
+        semaPropsList[i] = create_vulkan_external_sema_props(deviceID,
+            *vkSemaphoreList[i], vkExternalSemaphoreHandleType);
+    }
+
+    // Run the actual test
+    errNum = func(deviceID, context, queue_props,
+        num_sema_props, semaPropsList.data());
+
+    // Release semaphore
+    for (int i = 0; i < num_sema_props; i++) {
+        delete vkSemaphoreList[i];
+    }
+
+    return errNum;
+}
 
 int test_consistency_external_buffer(cl_device_id deviceID, cl_context _context,
                                      cl_command_queue _queue, int num_elements)
@@ -179,6 +305,9 @@ int test_consistency_external_buffer(cl_device_id deviceID, cl_context _context,
                                           0, NULL, &errNum);
     test_failure_error(errNum, CL_INVALID_BUFFER_SIZE,
                        "Should return CL_INVALID_BUFFER_SIZE");
+    
+    if (cmd_queue) clReleaseCommandQueue(cmd_queue);
+    if (context) clReleaseContext(context);
 
     return TEST_PASS;
 }
@@ -359,6 +488,9 @@ int test_consistency_external_image(cl_device_id deviceID, cl_context _context,
                        "when image desc passed as NULL");
     image.reset();
 
+    if (cmd_queue) clReleaseCommandQueue(cmd_queue);
+    if (context) clReleaseContext(context);
+    
     return TEST_PASS;
 }
 
@@ -564,5 +696,152 @@ int test_consistency_external_semaphore(cl_device_id deviceID,
     errNum = clReleaseSemaphoreKHRptr(clCl2Vksemaphore);
     test_error(errNum, "clReleaseSemaphoreKHRptr failed");
 
+    if (cmd_queue) clReleaseCommandQueue(cmd_queue);
+    if (context) clReleaseContext(context);
+
     return TEST_PASS;
+}
+
+int test_external_semaphore_simple_1(cl_device_id deviceID,
+                                     cl_context _context,
+                                     cl_command_queue _queue,
+                                     int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_simple_1,        // actual func to run
+        deviceID,
+        1,                                      // #of sema_props to create
+        0);                                     // queue properties
+}
+
+int test_external_semaphore_simple_2(cl_device_id deviceID,
+                                     cl_context _context,
+                                     cl_command_queue _queue,
+                                     int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_simple_2,            // actual func to run
+        deviceID,
+        1,                                          // #of sema_props to create
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_external_semaphore_reuse(cl_device_id deviceID,
+                                  cl_context _context,
+                                  cl_command_queue _queue,
+                                  int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_reuse,           // actual func to run
+        deviceID,
+        1,                                      // #of sema_props to create
+        0);                                     // queue properties
+}
+
+int test_external_semaphore_cross_queues_ooo(cl_device_id deviceID,
+                                             cl_context _context,
+                                             cl_command_queue _queue,
+                                             int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_cross_queues,        // actual func to run
+        deviceID,
+        1,                                          // #of sema_props to create
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_external_semaphore_cross_queues_io(cl_device_id deviceID,
+                                            cl_context _context,
+                                            cl_command_queue _queue,
+                                            int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_cross_queues,    // actual func to run
+        deviceID,
+        1,                                      // #of sema_props to create
+        0);                                     // queue properties
+}
+
+int test_external_semaphore_multi_signal(cl_device_id deviceID,
+                                         cl_context _context,
+                                         cl_command_queue _queue,
+                                         int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_multi_signal,    // actual func to run
+        deviceID,
+        2,                                      // #of sema_props to create
+        0);                                     // queue properties
+}
+
+int test_external_semaphore_multi_wait(cl_device_id deviceID,
+                                       cl_context _context,
+                                       cl_command_queue _queue,
+                                       int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_multi_wait,      // actual func to run
+        deviceID,
+        2,                                      // #of sema_props to create
+        0);                                     // queue properties
+}
+
+int test_external_semaphore_queries(cl_device_id deviceID,
+                                    cl_context _context,
+                                    cl_command_queue _queue,
+                                    int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_queries,         // actual func to run
+        deviceID,
+        1,                                      // #of sema_props to create
+        0);                                     // queue properties
+}
+
+int test_external_semaphore_order_1(cl_device_id deviceID,
+                                    cl_context _context,
+                                    cl_command_queue _queue,
+                                    int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_order_1,             // actual func to run
+        deviceID,
+        1,                                          // #of sema_props to create
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_external_semaphore_order_2(cl_device_id deviceID,
+                                    cl_context _context,
+                                    cl_command_queue _queue,
+                                    int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_order_2,             // actual func to run
+        deviceID,
+        1,                                          // #of sema_props to create
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_external_semaphore_order_3(cl_device_id deviceID,
+                                    cl_context _context,
+                                    cl_command_queue _queue,
+                                    int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_order_3,             // actual func to run
+        deviceID,
+        1,                                          // #of sema_props to create
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_external_semaphore_invalid_command(cl_device_id deviceID,
+                                            cl_context _context,
+                                            cl_command_queue _queue,
+                                            int num_elements)
+{
+    return test_external_semaphore_helper(
+        test_semaphores_common_invalid_command,     // actual func to run
+        deviceID,
+        2,                                          // #of sema_props to create
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
 }

@@ -40,6 +40,7 @@ set (${MODULE_NAME}_SOURCES
         ../../test_common/harness/parseParameters.cpp
         ../../test_common/harness/deviceInfo.cpp
         ../../test_common/harness/crc32.cpp
+        ../api/test_semaphores.cpp
     )
 
 set_source_files_properties(
