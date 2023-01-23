@@ -290,6 +290,10 @@ int run_test_with_two_queue(cl_context &context, cl_command_queue &cmd_queue1,
                 {
                     clCl2VkExternalSemaphore->signal(cmd_queue2);
                 }
+                if (first_launch)
+                {
+                    clReleaseEvent(first_launch);
+                }
             }
             error_2 = (uint8_t *)malloc(sizeof(uint8_t));
             if (NULL == error_2)
@@ -371,6 +375,11 @@ int run_test_with_two_queue(cl_context &context, cl_command_queue &cmd_queue1,
                                                + numBuffers);
             externalMemory.erase(externalMemory.begin(),
                                  externalMemory.begin() + numBuffers);
+            if (error_1)
+            {
+                clReleaseMemObject(error_1);
+                error_1 = NULL;
+            }
         }
     }
 CLEANUP:
@@ -642,6 +651,11 @@ int run_test_with_one_queue(cl_context &context, cl_command_queue &cmd_queue1,
                                                + numBuffers);
             externalMemory.erase(externalMemory.begin(),
                                  externalMemory.begin() + numBuffers);
+            if (error_1)
+            {
+                clReleaseMemObject(error_1);
+                error_1 = NULL;
+            }
         }
     }
 CLEANUP:
@@ -966,6 +980,11 @@ int run_test_with_multi_import_same_ctx(
                                                 + numBuffers);
                 }
                 externalMemory.clear();
+                if (error_1)
+                {
+                    clReleaseMemObject(error_1);
+                    error_1 = NULL;
+                }
             }
         }
     }
@@ -1443,6 +1462,16 @@ int run_test_with_multi_import_diff_ctx(
                 }
                 externalMemory1.clear();
                 externalMemory2.clear();
+                if (error_1)
+                {
+                    clReleaseMemObject(error_1);
+                    error_1 = NULL;
+                }
+                if (error_2)
+                {
+                    clReleaseMemObject(error_2);
+                    error_2 = NULL;
+                }
             }
         }
     }
@@ -1500,8 +1529,8 @@ int test_buffer_common(cl_device_id device_, cl_context context_,
     char buf[BUFFERSIZE];
     cl_device_id *devices;
     char *extensions = NULL;
-    cl_kernel verify_kernel;
-    cl_kernel verify_kernel2;
+    cl_kernel verify_kernel = NULL;
+    cl_kernel verify_kernel2 = NULL;
     cl_kernel kernel[3] = { NULL, NULL, NULL };
     cl_kernel kernel2[3] = { NULL, NULL, NULL };
     const char *program_source_const[3] = { kernel_text_numbuffer_1,
@@ -1686,6 +1715,10 @@ int test_buffer_common(cl_device_id device_, cl_context context_,
         for (int i = 0; i < 3; i++)
         {
             program_source_length = strlen(program_source_const[i]);
+            if (program[i])
+            {
+                clReleaseProgram(program[i]);
+            }
             program[i] =
                 clCreateProgramWithSource(context2, 1, &program_source_const[i],
                                           &program_source_length, &errNum);
@@ -1704,6 +1737,10 @@ int test_buffer_common(cl_device_id device_, cl_context context_,
             }
         }
         program_source_length = strlen(program_source_const_verify);
+        if (program_verify)
+        {
+            clReleaseProgram(program_verify);
+        }
         program_verify =
             clCreateProgramWithSource(context2, 1, &program_source_const_verify,
                                       &program_source_length, &errNum);
@@ -1772,7 +1809,11 @@ CLEANUP:
     {
         if (program[i]) clReleaseProgram(program[i]);
         if (kernel[i]) clReleaseKernel(kernel[i]);
+        if (kernel2[i]) clReleaseKernel(kernel2[i]);
     }
+    if (program_verify) clReleaseProgram(program_verify);
+    if (verify_kernel) clReleaseKernel(verify_kernel);
+    if (verify_kernel2) clReleaseKernel(verify_kernel2);
     if (cmd_queue1) clReleaseCommandQueue(cmd_queue1);
     if (cmd_queue2) clReleaseCommandQueue(cmd_queue2);
     if (cmd_queue3) clReleaseCommandQueue(cmd_queue3);

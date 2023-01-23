@@ -15,6 +15,7 @@
 //
 
 #ifdef _WIN32
+#define NOMINMAX
 #include <Windows.h>
 #include <dxgi1_2.h>
 #include <aclapi.h>
@@ -301,9 +302,11 @@ VulkanPhysicalDevice::VulkanPhysicalDevice(VkPhysicalDevice vkPhysicalDevice)
     for (size_t qfpIdx = 0; qfpIdx < vkQueueFamilyPropertiesList.size();
          qfpIdx++)
     {
-        VulkanQueueFamily *queueFamily = new VulkanQueueFamily(
-            uint32_t(qfpIdx), vkQueueFamilyPropertiesList[qfpIdx]);
-        m_queueFamilyList.add(*queueFamily);
+        if (isQueueFamilyRequired(vkQueueFamilyPropertiesList[qfpIdx])) {
+            VulkanQueueFamily *queueFamily = new VulkanQueueFamily(
+                uint32_t(qfpIdx), vkQueueFamilyPropertiesList[qfpIdx]);
+            m_queueFamilyList.add(*queueFamily);
+        }
     }
 
     vkGetPhysicalDeviceMemoryProperties(m_vkPhysicalDevice,
@@ -356,6 +359,11 @@ VulkanPhysicalDevice::~VulkanPhysicalDevice()
     }
 }
 
+bool VulkanPhysicalDevice::isQueueFamilyRequired(
+    VkQueueFamilyProperties &vkQueueFamilyProperties, uint32_t queueFlags)
+{
+    return (vkQueueFamilyProperties.queueFlags & queueFlags) == queueFlags;
+}
 
 const VulkanQueueFamilyList &VulkanPhysicalDevice::getQueueFamilyList() const
 {
@@ -494,18 +502,19 @@ VulkanDevice::VulkanDevice(
     : m_physicalDevice(physicalDevice), m_vkDevice(NULL)
 {
     uint32_t maxQueueCount = 0;
-    for (uint32_t qfIdx = 0;
-         qfIdx < (uint32_t)physicalDevice.getQueueFamilyList().size(); qfIdx++)
+    uint32_t qfIdx;
+    const VulkanQueueFamilyList &queueFamilyList = physicalDevice.getQueueFamilyList();
+    for (uint32_t listIdx = 0; listIdx < queueFamilyList.size(); listIdx++)
     {
         maxQueueCount =
-            std::max(maxQueueCount, queueFamilyToQueueCountMap[qfIdx]);
+            std::max(maxQueueCount, queueFamilyToQueueCountMap[queueFamilyList[listIdx]]);
     }
 
     std::vector<VkDeviceQueueCreateInfo> vkDeviceQueueCreateInfoList;
     std::vector<float> queuePriorities(maxQueueCount);
-    for (uint32_t qfIdx = 0;
-         qfIdx < (uint32_t)physicalDevice.getQueueFamilyList().size(); qfIdx++)
+    for (uint32_t listIdx = 0; listIdx < queueFamilyList.size(); listIdx++)
     {
+        qfIdx = queueFamilyList[listIdx];
         if (queueFamilyToQueueCountMap[qfIdx])
         {
             VkDeviceQueueCreateInfo vkDeviceQueueCreateInfo = {};
@@ -556,10 +565,9 @@ VulkanDevice::VulkanDevice(
 
     vkCreateDevice(physicalDevice, &vkDeviceCreateInfo, NULL, &m_vkDevice);
 
-    for (uint32_t qfIdx = 0;
-         qfIdx < (uint32_t)m_physicalDevice.getQueueFamilyList().size();
-         qfIdx++)
+    for (uint32_t listIdx = 0; listIdx < queueFamilyList.size(); listIdx++)
     {
+        qfIdx = queueFamilyList[listIdx];
         VulkanQueueList *queueList = new VulkanQueueList();
         m_queueFamilyIndexToQueueListMap.insert(qfIdx, *queueList);
         for (uint32_t qIdx = 0; qIdx < queueFamilyToQueueCountMap[qfIdx];
@@ -575,10 +583,11 @@ VulkanDevice::VulkanDevice(
 
 VulkanDevice::~VulkanDevice()
 {
-    for (uint32_t qfIdx = 0;
-         qfIdx < (uint32_t)m_physicalDevice.getQueueFamilyList().size();
-         qfIdx++)
+    uint32_t qfIdx;
+    const VulkanQueueFamilyList &queueFamilyList = m_physicalDevice.getQueueFamilyList();
+    for (uint32_t listIdx = 0; listIdx < queueFamilyList.size(); listIdx++)
     {
+        qfIdx = queueFamilyList[listIdx];
         for (size_t qIdx = 0;
              qIdx < m_queueFamilyIndexToQueueListMap[qfIdx].size(); qIdx++)
         {

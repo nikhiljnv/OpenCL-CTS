@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+#define NOMINMAX
 #include <vulkan_interop_common.hpp>
 #include <string>
 #include "harness/errorHelpers.h"
@@ -692,18 +693,21 @@ int run_test_with_two_queue(cl_context &context, cl_command_queue &cmd_queue1,
 
                                 clFinish(cmd_queue2);
                                 clCl2VkExternalSemaphore->signal(cmd_queue2);
+                                if (first_launch)
+                                {
+                                    clReleaseEvent(first_launch);
+                                }
                             }
 
                             unsigned int flags = 0;
                             size_t mipmapLevelOffset = 0;
-                            cl_event eventReadImage = NULL;
                             clFinish(cmd_queue2);
                             for (int i = 0; i < num2DImages; i++)
                             {
                                 err = clEnqueueReadImage(
                                     cmd_queue1, external_mem_image2[i], CL_TRUE,
                                     origin, region, 0, 0, dstBufferPtr, 0, NULL,
-                                    &eventReadImage);
+                                    NULL);
 
                                 if (err != CL_SUCCESS)
                                 {
@@ -1229,13 +1233,12 @@ int run_test_with_one_queue(cl_context &context, cl_command_queue &cmd_queue1,
 
                             unsigned int flags = 0;
                             size_t mipmapLevelOffset = 0;
-                            cl_event eventReadImage = NULL;
                             for (int i = 0; i < num2DImages; i++)
                             {
                                 err = clEnqueueReadImage(
                                     cmd_queue1, external_mem_image2[i], CL_TRUE,
                                     origin, region, 0, 0, dstBufferPtr, 0, NULL,
-                                    &eventReadImage);
+                                    NULL);
 
                                 if (err != CL_SUCCESS)
                                 {
@@ -1549,6 +1552,14 @@ int test_image_common(cl_device_id device_, cl_context context_,
         {
             print_error(err, "clCreateKernel failed ");
             goto CLEANUP;
+        }
+        for (int k = 0; k < num_kernel_types; k++)
+        {
+            if (program[k])
+            {
+                clReleaseProgram(program[k]);
+                program[k] = NULL;
+            }
         }
     }
     if (numCQ == 2)

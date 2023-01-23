@@ -36,3 +36,52 @@ extern int test_platform_info(cl_device_id device, cl_context context,
                               cl_command_queue queue, int num_elements);
 extern int test_device_info(cl_device_id device, cl_context context,
                             cl_command_queue queue, int num_elements);
+
+extern int test_external_semaphore_simple_1(cl_device_id deviceID,
+                                            cl_context _context,
+                                            cl_command_queue _queue,
+                                            int num_elements);
+extern int test_external_semaphore_simple_2(cl_device_id deviceID,
+                                            cl_context _context,
+                                            cl_command_queue _queue,
+                                            int num_elements);
+extern int test_external_semaphore_reuse(cl_device_id deviceID,
+                                         cl_context _context,
+                                         cl_command_queue _queue,
+                                         int num_elements);
+extern int test_external_semaphore_cross_queues_ooo(cl_device_id deviceID,
+                                                    cl_context _context,
+                                                    cl_command_queue _queue,
+                                                    int num_elements);
+extern int test_external_semaphore_cross_queues_io(cl_device_id deviceID,
+                                                   cl_context _context,
+                                                   cl_command_queue _queue,
+                                                   int num_elements);
+extern int test_external_semaphore_multi_signal(cl_device_id deviceID,
+                                                cl_context _context,
+                                                cl_command_queue _queue,
+                                                int num_elements);
+extern int test_external_semaphore_multi_wait(cl_device_id deviceID,
+                                              cl_context _context,
+                                              cl_command_queue _queue,
+                                              int num_elements);
+extern int test_external_semaphore_queries(cl_device_id deviceID,
+                                           cl_context _context,
+                                           cl_command_queue _queue,
+                                           int num_elements);
+extern int test_external_semaphore_order_1(cl_device_id deviceID,
+                                           cl_context _context,
+                                           cl_command_queue _queue,
+                                           int num_elements);
+extern int test_external_semaphore_order_2(cl_device_id deviceID,
+                                           cl_context _context,
+                                           cl_command_queue _queue,
+                                           int num_elements);
+extern int test_external_semaphore_order_3(cl_device_id deviceID,
+                                           cl_context _context,
+                                           cl_command_queue _queue,
+                                           int num_elements);
+extern int test_external_semaphore_invalid_command(cl_device_id deviceID,
+                                                   cl_context _context,
+                                                   cl_command_queue _queue,
+                                                   int num_elements);
