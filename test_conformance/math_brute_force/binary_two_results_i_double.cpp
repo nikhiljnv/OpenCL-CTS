@@ -14,10 +14,12 @@
 // limitations under the License.
 //
 
+#include "common.h"
 #include "function_list.h"
 #include "test_functions.h"
 #include "utility.h"
 
+#include <cinttypes>
 #include <climits>
 #include <cstring>
 
@@ -26,112 +28,32 @@ namespace {
 int BuildKernel(const char *name, int vectorSize, cl_kernel *k, cl_program *p,
                 bool relaxedMode)
 {
-    const char *c[] = { "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n",
-                        "__kernel void math_kernel",
-                        sizeNames[vectorSize],
-                        "( __global double",
-                        sizeNames[vectorSize],
-                        "* out, __global int",
-                        sizeNames[vectorSize],
-                        "* out2, __global double",
-                        sizeNames[vectorSize],
-                        "* in1, __global double",
-                        sizeNames[vectorSize],
-                        "* in2 )\n"
-                        "{\n"
-                        "   size_t i = get_global_id(0);\n"
-                        "   out[i] = ",
-                        name,
-                        "( in1[i], in2[i], out2 + i );\n"
-                        "}\n" };
-
-    const char *c3[] = {
-        "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n",
-        "__kernel void math_kernel",
-        sizeNames[vectorSize],
-        "( __global double* out, __global int* out2, __global double* in, "
-        "__global double* in2)\n"
-        "{\n"
-        "   size_t i = get_global_id(0);\n"
-        "   if( i + 1 < get_global_size(0) )\n"
-        "   {\n"
-        "       double3 d0 = vload3( 0, in + 3 * i );\n"
-        "       double3 d1 = vload3( 0, in2 + 3 * i );\n"
-        "       int3 i0 = 0xdeaddead;\n"
-        "       d0 = ",
-        name,
-        "( d0, d1, &i0 );\n"
-        "       vstore3( d0, 0, out + 3*i );\n"
-        "       vstore3( i0, 0, out2 + 3*i );\n"
-        "   }\n"
-        "   else\n"
-        "   {\n"
-        "       size_t parity = i & 1;   // Figure out how many elements are "
-        "left over after BUFFER_SIZE % (3*sizeof(float)). Assume power of two "
-        "buffer size \n"
-        "       double3 d0;\n"
-        "       double3 d1;\n"
-        "       int3 i0 = 0xdeaddead;\n"
-        "       switch( parity )\n"
-        "       {\n"
-        "           case 1:\n"
-        "               d0 = (double3)( in[3*i], NAN, NAN ); \n"
-        "               d1 = (double3)( in2[3*i], NAN, NAN ); \n"
-        "               break;\n"
-        "           case 0:\n"
-        "               d0 = (double3)( in[3*i], in[3*i+1], NAN ); \n"
-        "               d1 = (double3)( in2[3*i], in2[3*i+1], NAN ); \n"
-        "               break;\n"
-        "       }\n"
-        "       d0 = ",
-        name,
-        "( d0, d1, &i0 );\n"
-        "       switch( parity )\n"
-        "       {\n"
-        "           case 0:\n"
-        "               out[3*i+1] = d0.y; \n"
-        "               out2[3*i+1] = i0.y; \n"
-        "               // fall through\n"
-        "           case 1:\n"
-        "               out[3*i] = d0.x; \n"
-        "               out2[3*i] = i0.x; \n"
-        "               break;\n"
-        "       }\n"
-        "   }\n"
-        "}\n"
-    };
-
-    const char **kern = c;
-    size_t kernSize = sizeof(c) / sizeof(c[0]);
-
-    if (sizeValues[vectorSize] == 3)
-    {
-        kern = c3;
-        kernSize = sizeof(c3) / sizeof(c3[0]);
-    }
-
-    char testName[32];
-    snprintf(testName, sizeof(testName) - 1, "math_kernel%s",
-             sizeNames[vectorSize]);
-
-    return MakeKernel(kern, (cl_uint)kernSize, testName, k, p, relaxedMode);
+    auto kernel_name = GetKernelName(vectorSize);
+    auto source = GetBinaryKernel(kernel_name, name, ParameterType::Double,
+                                  ParameterType::Int, ParameterType::Double,
+                                  ParameterType::Double, vectorSize);
+    std::array<const char *, 1> sources{ source.c_str() };
+    return MakeKernel(sources.data(), sources.size(), kernel_name.c_str(), k, p,
+                      relaxedMode);
 }
 
-struct BuildKernelInfo
+using Kernels = std::array<clKernelWrapper, VECTOR_SIZE_COUNT>;
+
+struct BuildKernelInfo2
 {
-    cl_uint offset; // the first vector size to build
-    cl_kernel *kernels;
-    cl_program *programs;
+    Kernels &kernels;
+    Programs &programs;
     const char *nameInCode;
     bool relaxedMode; // Whether to build with -cl-fast-relaxed-math.
 };
 
 cl_int BuildKernelFn(cl_uint job_id, cl_uint thread_id UNUSED, void *p)
 {
-    BuildKernelInfo *info = (BuildKernelInfo *)p;
-    cl_uint i = info->offset + job_id;
-    return BuildKernel(info->nameInCode, i, info->kernels + i,
-                       info->programs + i, info->relaxedMode);
+    BuildKernelInfo2 *info = (BuildKernelInfo2 *)p;
+    cl_uint vectorSize = gMinVectorSizeIndex + job_id;
+    return BuildKernel(info->nameInCode, vectorSize,
+                       &(info->kernels[vectorSize]),
+                       &(info->programs[vectorSize]), info->relaxedMode);
 }
 
 struct ComputeReferenceInfoD
@@ -172,8 +94,8 @@ cl_int ReferenceD(cl_uint jid, cl_uint tid, void *userInfo)
 int TestFunc_DoubleI_Double_Double(const Func *f, MTdata d, bool relaxedMode)
 {
     int error;
-    cl_program programs[VECTOR_SIZE_COUNT];
-    cl_kernel kernels[VECTOR_SIZE_COUNT];
+    Programs programs;
+    Kernels kernels;
     float maxError = 0.0f;
     int64_t maxError2 = 0;
     int ftz = f->ftz || gForceFTZ;
@@ -191,8 +113,8 @@ int TestFunc_DoubleI_Double_Double(const Func *f, MTdata d, bool relaxedMode)
 
     // Init the kernels
     {
-        BuildKernelInfo build_info = { gMinVectorSizeIndex, kernels, programs,
-                                       f->nameInCode, relaxedMode };
+        BuildKernelInfo2 build_info{ kernels, programs, f->nameInCode,
+                                     relaxedMode };
         if ((error = ThreadPool_Do(BuildKernelFn,
                                    gMaxVectorSizeIndex - gMinVectorSizeIndex,
                                    &build_info)))
@@ -379,7 +301,7 @@ int TestFunc_DoubleI_Double_Double(const Func *f, MTdata d, bool relaxedMode)
                 if (iptrUndefined) iErr = 0;
 
                 int fail = !(fabsf(err) <= f->double_ulps && iErr == 0);
-                if (ftz && fail)
+                if ((ftz || relaxedMode) && fail)
                 {
                     // retry per section 6.5.3.2
                     if (IsDoubleResultSubnormal(correct, f->double_ulps))
@@ -527,17 +449,20 @@ int TestFunc_DoubleI_Double_Double(const Func *f, MTdata d, bool relaxedMode)
 
                 if (fail)
                 {
-                    vlog_error(
-                        "\nERROR: %sD%s: {%f, %lld} ulp error at {%.13la, "
-                        "%.13la} ({ 0x%16.16llx, 0x%16.16llx}): *{%.13la, "
-                        "%d} ({ 0x%16.16llx, 0x%8.8x}) vs. {%.13la, %d} ({ "
-                        "0x%16.16llx, 0x%8.8x})\n",
-                        f->name, sizeNames[k], err, iErr, ((double *)gIn)[j],
-                        ((double *)gIn2)[j], ((cl_ulong *)gIn)[j],
-                        ((cl_ulong *)gIn2)[j], ((double *)gOut_Ref)[j],
-                        ((int *)gOut_Ref2)[j], ((cl_ulong *)gOut_Ref)[j],
-                        ((cl_uint *)gOut_Ref2)[j], test, q2[j],
-                        ((cl_ulong *)q)[j], ((cl_uint *)q2)[j]);
+                    vlog_error("\nERROR: %sD%s: {%f, %" PRId64
+                               "} ulp error at {%.13la, "
+                               "%.13la} ({ 0x%16.16" PRIx64 ", 0x%16.16" PRIx64
+                               "}): *{%.13la, "
+                               "%d} ({ 0x%16.16" PRIx64
+                               ", 0x%8.8x}) vs. {%.13la, %d} ({ "
+                               "0x%16.16" PRIx64 ", 0x%8.8x})\n",
+                               f->name, sizeNames[k], err, iErr,
+                               ((double *)gIn)[j], ((double *)gIn2)[j],
+                               ((cl_ulong *)gIn)[j], ((cl_ulong *)gIn2)[j],
+                               ((double *)gOut_Ref)[j], ((int *)gOut_Ref2)[j],
+                               ((cl_ulong *)gOut_Ref)[j],
+                               ((cl_uint *)gOut_Ref2)[j], test, q2[j],
+                               ((cl_ulong *)q)[j], ((cl_uint *)q2)[j]);
                     error = -1;
                     goto exit;
                 }
@@ -548,8 +473,9 @@ int TestFunc_DoubleI_Double_Double(const Func *f, MTdata d, bool relaxedMode)
         {
             if (gVerboseBruteForce)
             {
-                vlog("base:%14u step:%10zu  bufferSize:%10zd \n", i, step,
-                     BUFFER_SIZE);
+                vlog("base:%14" PRIu64 " step:%10" PRIu64
+                     "  bufferSize:%10d \n",
+                     i, step, BUFFER_SIZE);
             }
             else
             {
@@ -566,19 +492,12 @@ int TestFunc_DoubleI_Double_Double(const Func *f, MTdata d, bool relaxedMode)
         else
             vlog("passed");
 
-        vlog("\t{%8.2f, %lld} @ {%a, %a}", maxError, maxError2, maxErrorVal,
-             maxErrorVal2);
+        vlog("\t{%8.2f, %" PRId64 "} @ {%a, %a}", maxError, maxError2,
+             maxErrorVal, maxErrorVal2);
     }
 
     vlog("\n");
 
 exit:
-    // Release
-    for (auto k = gMinVectorSizeIndex; k < gMaxVectorSizeIndex; k++)
-    {
-        clReleaseKernel(kernels[k]);
-        clReleaseProgram(programs[k]);
-    }
-
     return error;
 }

@@ -1,6 +1,6 @@
 //
 // Copyright (c) 2017 The Khronos Group Inc.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -123,10 +123,6 @@ static int RunKernel( cl_kernel kernel, void *inBuf, void *outBuf, size_t blockC
 
 void *FlushToZero( void );
 void UnFlushToZero( void *);
-
-static cl_program CreateImplicitConvertProgram( Type outType, Type inType, SaturationMode sat, RoundingMode round, int vectorSize, char testName[256], cl_int *error );
-static cl_program CreateStandardProgram( Type outType, Type inType, SaturationMode sat, RoundingMode round, int vectorSize, char testName[256], cl_int *error );
-
 
 // Windows (since long double got deprecated) sets the x87 to 53-bit precision
 // (that's x87 default state).  This causes problems with the tests that
@@ -343,7 +339,7 @@ int main (int argc, const char **argv )
 static int ParseArgs( int argc, const char **argv )
 {
     int i;
-    argList = (const char **)calloc( argc - 1, sizeof( char*) );
+    argList = (const char **)calloc(argc, sizeof(char *));
     argCount = 0;
 
     if( NULL == argList && argc > 1 )
@@ -483,8 +479,6 @@ static int ParseArgs( int argc, const char **argv )
     }
 
     vlog( "\n" );
-
-    vlog( "Test binary built %s %s\n", __DATE__, __TIME__ );
 
     PrintArch();
 
@@ -1666,9 +1660,7 @@ static cl_program   MakeProgram( Type outType, Type inType, SaturationMode sat, 
                                         &programSource, testName, flags);
     if (error)
     {
-        char    buffer[2048] = "";
-
-        vlog_error("Failed to build kernel/program.\n", error);
+        vlog_error("Failed to build kernel/program (err = %d).\n", error);
         clReleaseProgram(program);
         return NULL;
     }

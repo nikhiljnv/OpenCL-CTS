@@ -23,119 +23,38 @@
 
 namespace {
 
-int BuildKernel(const char *name, int vectorSize, cl_uint kernel_count,
-                cl_kernel *k, cl_program *p, bool relaxedMode)
-{
-    const char *c[] = { "__kernel void math_kernel",
-                        sizeNames[vectorSize],
-                        "( __global float",
-                        sizeNames[vectorSize],
-                        "* out, __global float",
-                        sizeNames[vectorSize],
-                        "* in )\n"
-                        "{\n"
-                        "   size_t i = get_global_id(0);\n"
-                        "   out[i] = ",
-                        name,
-                        "( in[i] );\n"
-                        "}\n" };
-
-    const char *c3[] = {
-        "__kernel void math_kernel",
-        sizeNames[vectorSize],
-        "( __global float* out, __global float* in)\n"
-        "{\n"
-        "   size_t i = get_global_id(0);\n"
-        "   if( i + 1 < get_global_size(0) )\n"
-        "   {\n"
-        "       float3 f0 = vload3( 0, in + 3 * i );\n"
-        "       f0 = ",
-        name,
-        "( f0 );\n"
-        "       vstore3( f0, 0, out + 3*i );\n"
-        "   }\n"
-        "   else\n"
-        "   {\n"
-        "       size_t parity = i & 1;   // Figure out how many elements are "
-        "left over after BUFFER_SIZE % (3*sizeof(float)). Assume power of two "
-        "buffer size \n"
-        "       float3 f0;\n"
-        "       switch( parity )\n"
-        "       {\n"
-        "           case 1:\n"
-        "               f0 = (float3)( in[3*i], NAN, NAN ); \n"
-        "               break;\n"
-        "           case 0:\n"
-        "               f0 = (float3)( in[3*i], in[3*i+1], NAN ); \n"
-        "               break;\n"
-        "       }\n"
-        "       f0 = ",
-        name,
-        "( f0 );\n"
-        "       switch( parity )\n"
-        "       {\n"
-        "           case 0:\n"
-        "               out[3*i+1] = f0.y; \n"
-        "               // fall through\n"
-        "           case 1:\n"
-        "               out[3*i] = f0.x; \n"
-        "               break;\n"
-        "       }\n"
-        "   }\n"
-        "}\n"
-    };
-
-    const char **kern = c;
-    size_t kernSize = sizeof(c) / sizeof(c[0]);
-
-    if (sizeValues[vectorSize] == 3)
-    {
-        kern = c3;
-        kernSize = sizeof(c3) / sizeof(c3[0]);
-    }
-
-    char testName[32];
-    snprintf(testName, sizeof(testName) - 1, "math_kernel%s",
-             sizeNames[vectorSize]);
-
-    return MakeKernels(kern, (cl_uint)kernSize, testName, kernel_count, k, p,
-                       relaxedMode);
-}
-
-struct BuildKernelInfo
-{
-    cl_uint offset; // the first vector size to build
-    cl_uint kernel_count;
-    KernelMatrix &kernels;
-    cl_program *programs;
-    const char *nameInCode;
-    bool relaxedMode; // Whether to build with -cl-fast-relaxed-math.
-};
-
 cl_int BuildKernelFn(cl_uint job_id, cl_uint thread_id UNUSED, void *p)
 {
-    BuildKernelInfo *info = (BuildKernelInfo *)p;
-    cl_uint i = info->offset + job_id;
-    return BuildKernel(info->nameInCode, i, info->kernel_count,
-                       info->kernels[i].data(), info->programs + i,
-                       info->relaxedMode);
+    BuildKernelInfo &info = *(BuildKernelInfo *)p;
+    auto generator = [](const std::string &kernel_name, const char *builtin,
+                        cl_uint vector_size_index) {
+        return GetUnaryKernel(kernel_name, builtin, ParameterType::Float,
+                              ParameterType::Float, vector_size_index);
+    };
+    return BuildKernels(info, job_id, generator);
 }
 
 // Thread specific data for a worker thread
 struct ThreadInfo
 {
-    cl_mem inBuf; // input buffer for the thread
-    cl_mem outBuf[VECTOR_SIZE_COUNT]; // output buffers for the thread
+    // Input and output buffers for the thread
+    clMemWrapper inBuf;
+    Buffers outBuf;
+
     float maxError; // max error value. Init to 0.
     double maxErrorValue; // position of the max error value.  Init to 0.
-    cl_command_queue tQueue; // per thread command queue to improve performance
+
+    // Per thread command queue to improve performance
+    clCommandQueueWrapper tQueue;
 };
 
 struct TestInfo
 {
     size_t subBufferSize; // Size of the sub-buffer in elements
     const Func *f; // A pointer to the function info
-    cl_program programs[VECTOR_SIZE_COUNT]; // programs for various vector sizes
+
+    // Programs for various vector sizes.
+    Programs programs;
 
     // Thread-specific kernels for each vector size:
     // k[vector_size][thread_id]
@@ -256,7 +175,8 @@ cl_int Test(cl_uint job_id, cl_uint thread_id, void *data)
         if ((error = clEnqueueUnmapMemObject(tinfo->tQueue, tinfo->outBuf[j],
                                              out[j], 0, NULL, NULL)))
         {
-            vlog_error("Error: clEnqueueMapBuffer failed! err: %d\n", error);
+            vlog_error("Error: clEnqueueUnmapMemObject failed! err: %d\n",
+                       error);
             return error;
         }
 
@@ -435,7 +355,7 @@ cl_int Test(cl_uint job_id, cl_uint thread_id, void *data)
 
                 if (fail)
                 {
-                    if (ftz)
+                    if (ftz || relaxedMode)
                     {
                         typedef int (*CheckForSubnormal)(
                             double, float); // If we are in fast relaxed math,
@@ -576,14 +496,7 @@ int TestFunc_Float_Float(const Func *f, MTdata d, bool relaxedMode)
     test_info.ftz =
         f->ftz || gForceFTZ || 0 == (CL_FP_DENORM & gFloatCapabilities);
     test_info.relaxedMode = relaxedMode;
-    // cl_kernels aren't thread safe, so we make one for each vector size for
-    // every thread
-    for (auto i = gMinVectorSizeIndex; i < gMaxVectorSizeIndex; i++)
-    {
-        test_info.k[i].resize(test_info.threadCount, nullptr);
-    }
-
-    test_info.tinfo.resize(test_info.threadCount, ThreadInfo{});
+    test_info.tinfo.resize(test_info.threadCount);
     for (cl_uint i = 0; i < test_info.threadCount; i++)
     {
         cl_buffer_region region = {
@@ -643,10 +556,9 @@ int TestFunc_Float_Float(const Func *f, MTdata d, bool relaxedMode)
 
     // Init the kernels
     {
-        BuildKernelInfo build_info = {
-            gMinVectorSizeIndex, test_info.threadCount, test_info.k,
-            test_info.programs,  f->nameInCode,         relaxedMode
-        };
+        BuildKernelInfo build_info{ test_info.threadCount, test_info.k,
+                                    test_info.programs, f->nameInCode,
+                                    relaxedMode };
         if ((error = ThreadPool_Do(BuildKernelFn,
                                    gMaxVectorSizeIndex - gMinVectorSizeIndex,
                                    &build_info)))
@@ -687,23 +599,5 @@ int TestFunc_Float_Float(const Func *f, MTdata d, bool relaxedMode)
     vlog("\n");
 
 exit:
-    // Release
-    for (auto i = gMinVectorSizeIndex; i < gMaxVectorSizeIndex; i++)
-    {
-        clReleaseProgram(test_info.programs[i]);
-        for (auto &kernel : test_info.k[i])
-        {
-            clReleaseKernel(kernel);
-        }
-    }
-
-    for (auto &threadInfo : test_info.tinfo)
-    {
-        clReleaseMemObject(threadInfo.inBuf);
-        for (auto j = gMinVectorSizeIndex; j < gMaxVectorSizeIndex; j++)
-            clReleaseMemObject(threadInfo.outBuf[j]);
-        clReleaseCommandQueue(threadInfo.tQueue);
-    }
-
     return error;
 }
