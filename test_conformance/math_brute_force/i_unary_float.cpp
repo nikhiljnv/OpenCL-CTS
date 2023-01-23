@@ -14,10 +14,12 @@
 // limitations under the License.
 //
 
+#include "common.h"
 #include "function_list.h"
 #include "test_functions.h"
 #include "utility.h"
 
+#include <cinttypes>
 #include <cstring>
 
 namespace {
@@ -25,96 +27,31 @@ namespace {
 int BuildKernel(const char *name, int vectorSize, cl_kernel *k, cl_program *p,
                 bool relaxedMode)
 {
-    const char *c[] = { "__kernel void math_kernel",
-                        sizeNames[vectorSize],
-                        "( __global int",
-                        sizeNames[vectorSize],
-                        "* out, __global float",
-                        sizeNames[vectorSize],
-                        "* in)\n"
-                        "{\n"
-                        "   size_t i = get_global_id(0);\n"
-                        "   out[i] = ",
-                        name,
-                        "( in[i] );\n"
-                        "}\n" };
-
-    const char *c3[] = {
-        "__kernel void math_kernel",
-        sizeNames[vectorSize],
-        "( __global int* out, __global float* in)\n"
-        "{\n"
-        "   size_t i = get_global_id(0);\n"
-        "   if( i + 1 < get_global_size(0) )\n"
-        "   {\n"
-        "       float3 f0 = vload3( 0, in + 3 * i );\n"
-        "       int3 i0 = ",
-        name,
-        "( f0 );\n"
-        "       vstore3( i0, 0, out + 3*i );\n"
-        "   }\n"
-        "   else\n"
-        "   {\n"
-        "       size_t parity = i & 1;   // Figure out how many elements are "
-        "left over after BUFFER_SIZE % (3*sizeof(float)). Assume power of two "
-        "buffer size \n"
-        "       float3 f0;\n"
-        "       switch( parity )\n"
-        "       {\n"
-        "           case 1:\n"
-        "               f0 = (float3)( in[3*i], NAN, NAN ); \n"
-        "               break;\n"
-        "           case 0:\n"
-        "               f0 = (float3)( in[3*i], in[3*i+1], NAN ); \n"
-        "               break;\n"
-        "       }\n"
-        "       int3 i0 = ",
-        name,
-        "( f0 );\n"
-        "       switch( parity )\n"
-        "       {\n"
-        "           case 0:\n"
-        "               out[3*i+1] = i0.y; \n"
-        "               // fall through\n"
-        "           case 1:\n"
-        "               out[3*i] = i0.x; \n"
-        "               break;\n"
-        "       }\n"
-        "   }\n"
-        "}\n"
-    };
-
-    const char **kern = c;
-    size_t kernSize = sizeof(c) / sizeof(c[0]);
-
-    if (sizeValues[vectorSize] == 3)
-    {
-        kern = c3;
-        kernSize = sizeof(c3) / sizeof(c3[0]);
-    }
-
-    char testName[32];
-    snprintf(testName, sizeof(testName) - 1, "math_kernel%s",
-             sizeNames[vectorSize]);
-
-    return MakeKernel(kern, (cl_uint)kernSize, testName, k, p, relaxedMode);
+    auto kernel_name = GetKernelName(vectorSize);
+    auto source = GetUnaryKernel(kernel_name, name, ParameterType::Int,
+                                 ParameterType::Float, vectorSize);
+    std::array<const char *, 1> sources{ source.c_str() };
+    return MakeKernel(sources.data(), sources.size(), kernel_name.c_str(), k, p,
+                      relaxedMode);
 }
 
-struct BuildKernelInfo
+using Kernels = std::array<clKernelWrapper, VECTOR_SIZE_COUNT>;
+
+struct BuildKernelInfo2
 {
-    cl_uint offset; // the first vector size to build
-    cl_kernel *kernels;
-    cl_program *programs;
+    Kernels &kernels;
+    Programs &programs;
     const char *nameInCode;
     bool relaxedMode; // Whether to build with -cl-fast-relaxed-math.
 };
 
 cl_int BuildKernelFn(cl_uint job_id, cl_uint thread_id UNUSED, void *p)
 {
-    BuildKernelInfo *info = (BuildKernelInfo *)p;
-    cl_uint i = info->offset + job_id;
-    return BuildKernel(info->nameInCode, i, info->kernels + i,
-                       info->programs + i, info->relaxedMode);
+    BuildKernelInfo2 *info = (BuildKernelInfo2 *)p;
+    cl_uint vectorSize = gMinVectorSizeIndex + job_id;
+    return BuildKernel(info->nameInCode, vectorSize,
+                       &(info->kernels[vectorSize]),
+                       &(info->programs[vectorSize]), info->relaxedMode);
 }
 
 } // anonymous namespace
@@ -122,8 +59,8 @@ cl_int BuildKernelFn(cl_uint job_id, cl_uint thread_id UNUSED, void *p)
 int TestFunc_Int_Float(const Func *f, MTdata d, bool relaxedMode)
 {
     int error;
-    cl_program programs[VECTOR_SIZE_COUNT];
-    cl_kernel kernels[VECTOR_SIZE_COUNT];
+    Programs programs;
+    Kernels kernels;
     int ftz = f->ftz || gForceFTZ || 0 == (CL_FP_DENORM & gFloatCapabilities);
     uint64_t step = getTestStep(sizeof(float), BUFFER_SIZE);
     int scale = (int)((1ULL << 32) / (16 * BUFFER_SIZE / sizeof(float)) + 1);
@@ -139,8 +76,8 @@ int TestFunc_Int_Float(const Func *f, MTdata d, bool relaxedMode)
 
     // Init the kernels
     {
-        BuildKernelInfo build_info = { gMinVectorSizeIndex, kernels, programs,
-                                       f->nameInCode, relaxedMode };
+        BuildKernelInfo2 build_info{ kernels, programs, f->nameInCode,
+                                     relaxedMode };
         if ((error = ThreadPool_Do(BuildKernelFn,
                                    gMaxVectorSizeIndex - gMinVectorSizeIndex,
                                    &build_info)))
@@ -245,7 +182,7 @@ int TestFunc_Int_Float(const Func *f, MTdata d, bool relaxedMode)
                 // If we aren't getting the correctly rounded result
                 if (t[j] != q[j])
                 {
-                    if (ftz && IsFloatSubnormal(s[j]))
+                    if ((ftz || relaxedMode) && IsFloatSubnormal(s[j]))
                     {
                         unsigned int correct0 = f->func.i_f(0.0);
                         unsigned int correct1 = f->func.i_f(-0.0);
@@ -268,8 +205,9 @@ int TestFunc_Int_Float(const Func *f, MTdata d, bool relaxedMode)
         {
             if (gVerboseBruteForce)
             {
-                vlog("base:%14u step:%10zu  bufferSize:%10zd \n", i, step,
-                     BUFFER_SIZE);
+                vlog("base:%14" PRIu64 " step:%10" PRIu64
+                     "  bufferSize:%10d \n",
+                     i, step, BUFFER_SIZE);
             }
             else
             {
@@ -291,12 +229,5 @@ int TestFunc_Int_Float(const Func *f, MTdata d, bool relaxedMode)
 
 exit:
     RestoreFPState(&oldMode);
-    // Release
-    for (auto k = gMinVectorSizeIndex; k < gMaxVectorSizeIndex; k++)
-    {
-        clReleaseKernel(kernels[k]);
-        clReleaseProgram(programs[k]);
-    }
-
     return error;
 }
