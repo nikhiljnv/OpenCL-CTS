@@ -40,6 +40,10 @@ public:
 
 class VulkanPhysicalDevice {
     friend class VulkanInstance;
+    
+private:
+    bool isQueueFamilyRequired(VkQueueFamilyProperties &vkQueueFamilyProperties,
+                               uint32_t queueFlags = VULKAN_QUEUE_FLAG_MASK_ALL);
 
 protected:
     VkPhysicalDevice m_vkPhysicalDevice;

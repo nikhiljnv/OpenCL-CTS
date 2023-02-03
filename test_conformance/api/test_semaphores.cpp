@@ -72,15 +72,11 @@
 
 static const char* source = "__kernel void empty() {}";
 
-// Helper function that signals and waits on semaphore across two different
-// queues.
-static int semaphore_cross_queue_helper(cl_device_id deviceID,
-                                        cl_context context,
-                                        cl_command_queue queue_1,
-                                        cl_command_queue queue_2)
+static int test_semaphores_helper(semaphoreCommonTestfn func,
+                                  cl_device_id deviceID,
+                                  cl_context context,
+                                  cl_command_queue_properties queue_props)
 {
-    cl_int err;
-
     if (!is_extension_available(deviceID, "cl_khr_semaphore"))
     {
         log_info("cl_khr_semaphore is not supported on this platoform. "
@@ -88,55 +84,20 @@ static int semaphore_cross_queue_helper(cl_device_id deviceID,
         return TEST_SKIPPED_ITSELF;
     }
 
-    // Obtain pointers to semaphore's API
-    GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
-    GET_PFN(deviceID, clEnqueueSignalSemaphoresKHR);
-    GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
-    GET_PFN(deviceID, clReleaseSemaphoreKHR);
-
-    // Create semaphore
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
+    std::vector<cl_semaphore_properties_khr> sema_props{
+        (cl_semaphore_properties_khr)CL_SEMAPHORE_TYPE_KHR,
+        (cl_semaphore_properties_khr)CL_SEMAPHORE_TYPE_BINARY_KHR,
     };
-    cl_semaphore_khr sema =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
-    test_error(err, "Could not create semaphore");
 
-    // Signal semaphore on queue_1
-    clEventWrapper signal_event;
-    err = clEnqueueSignalSemaphoresKHR(queue_1, 1, &sema, nullptr, 0, nullptr,
-                                       &signal_event);
-    test_error(err, "Could not signal semaphore");
-
-    // Wait semaphore on queue_2
-    clEventWrapper wait_event;
-    err = clEnqueueWaitSemaphoresKHR(queue_2, 1, &sema, nullptr, 0, nullptr,
-                                     &wait_event);
-    test_error(err, "Could not wait semaphore");
-
-    // Finish queue_1 and queue_2
-    err = clFinish(queue_1);
-    test_error(err, "Could not finish queue");
-
-    err = clFinish(queue_2);
-    test_error(err, "Could not finish queue");
-
-    // Ensure all events are completed
-    test_assert_event_complete(signal_event);
-    test_assert_event_complete(wait_event);
-
-    // Release semaphore
-    err = clReleaseSemaphoreKHR(sema);
-    test_error(err, "Could not release semaphore");
-
-    return TEST_PASS;
+    return func(deviceID, context, queue_props,
+        1 /*num_sema_props*/, &sema_props /*sema_props_list*/);
 }
 
-// Confirm that a signal followed by a wait will complete successfully
-int test_semaphores_simple_1(cl_device_id deviceID, cl_context context,
-                             cl_command_queue defaultQueue, int num_elements)
+// Confirm that a signal followed by a wait will complete successfully
+int test_semaphores_common_simple_1(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -146,6 +107,11 @@ int test_semaphores_simple_1(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -153,19 +119,14 @@ int test_semaphores_simple_1(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create ooo queue
+    // Create queue
     clCommandQueueWrapper queue = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    // Create semaphore
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Signal semaphore
@@ -197,8 +158,10 @@ int test_semaphores_simple_1(cl_device_id deviceID, cl_context context,
 
 // Confirm that signal a semaphore with no event dependencies will not result
 // in an implicit dependency on everything previously submitted
-int test_semaphores_simple_2(cl_device_id deviceID, cl_context context,
-                             cl_command_queue defaultQueue, int num_elements)
+int test_semaphores_common_simple_2(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -208,6 +171,11 @@ int test_semaphores_simple_2(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -215,19 +183,14 @@ int test_semaphores_simple_2(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create ooo queue
+    // Create queue
     clCommandQueueWrapper queue = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    // Create semaphore
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Create user event
@@ -289,8 +252,10 @@ int test_semaphores_simple_2(cl_device_id deviceID, cl_context context,
 }
 
 // Confirm that a semaphore can be reused multiple times
-int test_semaphores_reuse(cl_device_id deviceID, cl_context context,
-                          cl_command_queue defaultQueue, int num_elements)
+int test_semaphores_common_reuse(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -300,6 +265,11 @@ int test_semaphores_reuse(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -307,19 +277,14 @@ int test_semaphores_reuse(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create ooo queue
+    // Create queue
     clCommandQueueWrapper queue = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    // Create semaphore
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Create Kernel
@@ -392,48 +357,75 @@ int test_semaphores_reuse(cl_device_id deviceID, cl_context context,
     return TEST_PASS;
 }
 
-// Confirm that a semaphore works across different ooo queues
-int test_semaphores_cross_queues_ooo(cl_device_id deviceID, cl_context context,
-                                     cl_command_queue defaultQueue,
-                                     int num_elements)
+// Confirm that a semaphore works across different ooo/io queues
+int test_semaphores_common_cross_queues(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
-    // Create ooo queues
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
+
+    // Obtain pointers to semaphore's API
+    GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
+    GET_PFN(deviceID, clEnqueueSignalSemaphoresKHR);
+    GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
+    GET_PFN(deviceID, clReleaseSemaphoreKHR);
+
+    // Create queues
     clCommandQueueWrapper queue_1 = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
     clCommandQueueWrapper queue_2 = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    return semaphore_cross_queue_helper(deviceID, context, queue_1, queue_2);
-}
+    cl_semaphore_khr sema =
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
+    test_error(err, "Could not create semaphore");
 
-// Confirm that a semaphore works across different in-order queues
-int test_semaphores_cross_queues_io(cl_device_id deviceID, cl_context context,
-                                    cl_command_queue defaultQueue,
-                                    int num_elements)
-{
-    cl_int err;
+    // Signal semaphore on queue_1
+    clEventWrapper signal_event;
+    err = clEnqueueSignalSemaphoresKHR(queue_1, 1, &sema, nullptr, 0, nullptr,
+                                       &signal_event);
+    test_error(err, "Could not signal semaphore");
 
-    // Create in-order queues
-    clCommandQueueWrapper queue_1 =
-        clCreateCommandQueue(context, deviceID, 0, &err);
-    test_error(err, "Could not create command queue");
+    // Wait semaphore on queue_2
+    clEventWrapper wait_event;
+    err = clEnqueueWaitSemaphoresKHR(queue_2, 1, &sema, nullptr, 0, nullptr,
+                                     &wait_event);
+    test_error(err, "Could not wait semaphore");
 
-    clCommandQueueWrapper queue_2 =
-        clCreateCommandQueue(context, deviceID, 0, &err);
-    test_error(err, "Could not create command queue");
+    // Finish queue_1 and queue_2
+    err = clFinish(queue_1);
+    test_error(err, "Could not finish queue");
 
-    return semaphore_cross_queue_helper(deviceID, context, queue_1, queue_2);
+    err = clFinish(queue_2);
+    test_error(err, "Could not finish queue");
+
+    // Ensure all events are completed
+    test_assert_event_complete(signal_event);
+    test_assert_event_complete(wait_event);
+
+    // Release semaphore
+    err = clReleaseSemaphoreKHR(sema);
+    test_error(err, "Could not release semaphore");
+
+    return TEST_PASS;
 }
 
 // Confirm that we can signal multiple semaphores with one command
-int test_semaphores_multi_signal(cl_device_id deviceID, cl_context context,
-                                 cl_command_queue defaultQueue,
-                                 int num_elements)
+int test_semaphores_common_multi_signal(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -443,6 +435,11 @@ int test_semaphores_multi_signal(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -450,23 +447,20 @@ int test_semaphores_multi_signal(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create ooo queue
+    // Create queue
     clCommandQueueWrapper queue = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    // Create semaphore
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema_1 =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     cl_semaphore_khr sema_2 =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(context,
+            num_sema_props > 1 ?
+            sema_props_list[1].data() : sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Signal semaphore 1 and 2
@@ -508,8 +502,10 @@ int test_semaphores_multi_signal(cl_device_id deviceID, cl_context context,
 }
 
 // Confirm that we can wait for multiple semaphores with one command
-int test_semaphores_multi_wait(cl_device_id deviceID, cl_context context,
-                               cl_command_queue defaultQueue, int num_elements)
+int test_semaphores_common_multi_wait(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -519,6 +515,11 @@ int test_semaphores_multi_wait(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -526,23 +527,20 @@ int test_semaphores_multi_wait(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create ooo queue
+    // Create queue
     clCommandQueueWrapper queue = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    // Create semaphores
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema_1 =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     cl_semaphore_khr sema_2 =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(context,
+            num_sema_props > 1 ?
+            sema_props_list[1].data() : sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Signal semaphore 1
@@ -584,8 +582,10 @@ int test_semaphores_multi_wait(cl_device_id deviceID, cl_context context,
 }
 
 // Confirm the semaphores can be successfully queried
-int test_semaphores_queries(cl_device_id deviceID, cl_context context,
-                            cl_command_queue defaultQueue, int num_elements)
+int test_semaphores_common_queries(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -595,6 +595,11 @@ int test_semaphores_queries(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -602,14 +607,9 @@ int test_semaphores_queries(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clRetainSemaphoreKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create binary semaphore
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Confirm that querying CL_SEMAPHORE_TYPE_KHR returns
@@ -635,7 +635,8 @@ int test_semaphores_queries(cl_device_id deviceID, cl_context context,
     // Confirm that querying CL_SEMAPHORE_PROPERTIES_KHR returns the same
     // properties the semaphore was created with
     SEMAPHORE_PARAM_TEST_ARRAY(CL_SEMAPHORE_PROPERTIES_KHR,
-                               cl_semaphore_properties_khr, 3, sema_props);
+                               cl_semaphore_properties_khr, 3,
+                               sema_props_list[0].data());
 
     // Confirm that querying CL_SEMAPHORE_PAYLOAD_KHR returns the unsignaled
     // state
@@ -650,8 +651,10 @@ int test_semaphores_queries(cl_device_id deviceID, cl_context context,
 // Confirm that it is possible to enqueue a signal of wait and signal in any
 // order as soon as the submission order (after deferred dependencies) is
 // correct. Case: first one deferred wait, then one non deferred signal.
-int test_semaphores_order_1(cl_device_id deviceID, cl_context context,
-                            cl_command_queue defaultQueue, int num_elements)
+int test_semaphores_common_order_1(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -661,6 +664,11 @@ int test_semaphores_order_1(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -668,19 +676,14 @@ int test_semaphores_order_1(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create ooo queue
+    // Create queue
     clCommandQueueWrapper queue = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    // Create semaphore
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Create user event
@@ -731,8 +734,10 @@ int test_semaphores_order_1(cl_device_id deviceID, cl_context context,
 // order as soon as the submission order (after deferred dependencies) is
 // correct. Case: first two deferred signals, then one deferred wait. Unblock
 // signal, then unblock wait. When wait completes, unblock the other signal.
-int test_semaphores_order_2(cl_device_id deviceID, cl_context context,
-                            cl_command_queue defaultQueue, int num_elements)
+int test_semaphores_common_order_2(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -742,6 +747,11 @@ int test_semaphores_order_2(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -749,19 +759,14 @@ int test_semaphores_order_2(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create ooo queue
+    // Create queue
     clCommandQueueWrapper queue = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    // Create semaphore
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Create user events
@@ -833,10 +838,12 @@ int test_semaphores_order_2(cl_device_id deviceID, cl_context context,
 // Confirm that it is possible to enqueue a signal of wait and signal in any
 // order as soon as the submission order (after deferred dependencies) is
 // correct. Case: first two deferred signals, then two deferred waits. Unblock
-// one signal and one wait (both blocked by the same user event). When wait
+// one signal and one wait (both blocked by the same user event). When wait
 // completes, unblock the other signal. Then unblock the other wait.
-int test_semaphores_order_3(cl_device_id deviceID, cl_context context,
-                            cl_command_queue defaultQueue, int num_elements)
+int test_semaphores_common_order_3(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -846,6 +853,11 @@ int test_semaphores_order_3(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -853,19 +865,14 @@ int test_semaphores_order_3(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create ooo queue
+    // Create queue
     clCommandQueueWrapper queue = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    // Create semaphore
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Create user events
@@ -1045,9 +1052,10 @@ int test_semaphores_import_export_fd(cl_device_id deviceID, cl_context context,
 
 // Test that an invalid semaphore command results in the invalidation of the
 // command's event and the dependencies' events
-int test_semaphores_invalid_command(cl_device_id deviceID, cl_context context,
-                                    cl_command_queue defaultQueue,
-                                    int num_elements)
+int test_semaphores_common_invalid_command(
+    cl_device_id deviceID, cl_context context,
+    cl_command_queue_properties queue_props, int num_sema_props,
+    std::vector<cl_semaphore_properties_khr> *sema_props_list)
 {
     cl_int err;
 
@@ -1057,6 +1065,11 @@ int test_semaphores_invalid_command(cl_device_id deviceID, cl_context context,
                  "Skipping test.\n");
         return TEST_SKIPPED_ITSELF;
     }
+    if (num_sema_props < 1)
+    {
+        throw std::runtime_error(
+            "Insufficient number of semaphore properties\n");
+    }
 
     // Obtain pointers to semaphore's API
     GET_PFN(deviceID, clCreateSemaphoreWithPropertiesKHR);
@@ -1064,23 +1077,20 @@ int test_semaphores_invalid_command(cl_device_id deviceID, cl_context context,
     GET_PFN(deviceID, clEnqueueWaitSemaphoresKHR);
     GET_PFN(deviceID, clReleaseSemaphoreKHR);
 
-    // Create ooo queue
+    // Create queue
     clCommandQueueWrapper queue = clCreateCommandQueue(
-        context, deviceID, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+        context, deviceID, queue_props, &err);
     test_error(err, "Could not create command queue");
 
-    // Create semaphores
-    cl_semaphore_properties_khr sema_props[] = {
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_KHR),
-        static_cast<cl_semaphore_properties_khr>(CL_SEMAPHORE_TYPE_BINARY_KHR),
-        0
-    };
     cl_semaphore_khr sema_1 =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(
+            context, sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     cl_semaphore_khr sema_2 =
-        clCreateSemaphoreWithPropertiesKHR(context, sema_props, &err);
+        clCreateSemaphoreWithPropertiesKHR(context,
+            num_sema_props > 1 ?
+            sema_props_list[1].data() : sema_props_list[0].data(), &err);
     test_error(err, "Could not create semaphore");
 
     // Create user events
@@ -1143,4 +1153,148 @@ int test_semaphores_invalid_command(cl_device_id deviceID, cl_context context,
     test_error(err, "Could not release semaphore");
 
     return TEST_PASS;
+}
+
+int test_semaphores_simple_1(cl_device_id deviceID,
+                             cl_context context,
+                             cl_command_queue queue,
+                             int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_simple_1,            // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_simple_2(cl_device_id deviceID,
+                             cl_context context,
+                             cl_command_queue queue,
+                             int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_simple_2,            // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_reuse(cl_device_id deviceID,
+                          cl_context context,
+                          cl_command_queue queue,
+                          int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_reuse,               // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_cross_queues_ooo(cl_device_id deviceID,
+                                     cl_context context,
+                                     cl_command_queue queue,
+                                     int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_cross_queues,        // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_cross_queues_io(cl_device_id deviceID,
+                                    cl_context context,
+                                    cl_command_queue queue,
+                                    int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_cross_queues,        // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_multi_signal(cl_device_id deviceID,
+                                 cl_context context,
+                                 cl_command_queue queue,
+                                 int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_multi_signal,        // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_multi_wait(cl_device_id deviceID,
+                               cl_context context,
+                               cl_command_queue queue,
+                               int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_multi_wait,          // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_queries(cl_device_id deviceID,
+                            cl_context context,
+                            cl_command_queue queue,
+                            int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_queries,             // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_order_1(cl_device_id deviceID,
+                            cl_context context,
+                            cl_command_queue queue,
+                            int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_order_1,             // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_order_2(cl_device_id deviceID,
+                            cl_context context,
+                            cl_command_queue queue,
+                            int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_order_2,             // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_order_3(cl_device_id deviceID,
+                            cl_context context,
+                            cl_command_queue queue,
+                            int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_order_3,             // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
+}
+
+int test_semaphores_invalid_command(cl_device_id deviceID,
+                                    cl_context context,
+                                    cl_command_queue queue,
+                                    int num_elements)
+{
+    return test_semaphores_helper(
+        test_semaphores_common_invalid_command,     // actual func to run
+        deviceID,
+        context,
+        CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE);    // queue properties
 }

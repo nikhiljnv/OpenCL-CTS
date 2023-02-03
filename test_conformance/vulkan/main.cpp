@@ -116,7 +116,19 @@ test_definition test_list[] = { ADD_TEST(buffer_single_queue),
                                 ADD_TEST(consistency_external_image),
                                 ADD_TEST(consistency_external_semaphore),
                                 ADD_TEST(platform_info),
-                                ADD_TEST(device_info) };
+                                ADD_TEST(device_info),
+                                ADD_TEST(external_semaphore_simple_1),
+                                ADD_TEST(external_semaphore_simple_2),
+                                ADD_TEST(external_semaphore_reuse),
+                                ADD_TEST(external_semaphore_cross_queues_ooo),
+                                ADD_TEST(external_semaphore_cross_queues_io),
+                                ADD_TEST(external_semaphore_multi_signal),
+                                ADD_TEST(external_semaphore_multi_wait),
+                                ADD_TEST(external_semaphore_queries),
+                                ADD_TEST(external_semaphore_order_1),
+                                ADD_TEST(external_semaphore_order_2),
+                                ADD_TEST(external_semaphore_order_3),
+                                ADD_TEST(external_semaphore_invalid_command) };
 
 const int test_num = ARRAY_SIZE(test_list);
 
