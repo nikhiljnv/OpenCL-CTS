@@ -101,6 +101,12 @@ int test_semaphores_common_simple_1(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
@@ -159,6 +165,12 @@ int test_semaphores_common_simple_2(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
@@ -247,6 +259,12 @@ int test_semaphores_common_reuse(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
@@ -411,6 +429,12 @@ int test_semaphores_common_multi_signal(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
@@ -485,6 +509,12 @@ int test_semaphores_common_multi_wait(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
@@ -559,6 +589,12 @@ int test_semaphores_common_queries(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
@@ -622,6 +658,12 @@ int test_semaphores_common_order_1(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
@@ -699,6 +741,12 @@ int test_semaphores_common_order_2(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
@@ -799,6 +847,12 @@ int test_semaphores_common_order_3(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
@@ -1005,6 +1059,12 @@ int test_semaphores_common_invalid_command(
 {
     cl_int err;
 
+    if (!is_extension_available(deviceID, "cl_khr_semaphore"))
+    {
+        log_info("cl_khr_semaphore is not supported on this platoform. "
+                 "Skipping test.\n");
+        return TEST_SKIPPED_ITSELF;
+    }
     if (num_sema_props < 1)
     {
         throw std::runtime_error(
