@@ -13,6 +13,7 @@ TOOLCHAIN_PREFIX_aarch64=aarch64-linux-gnu
 TOOLCHAIN_FILE=${TOP}/toolchain.cmake
 touch ${TOOLCHAIN_FILE}
 BUILD_OPENGL_TEST="OFF"
+BUILD_VULKAN_TEST="ON"
 
 # Prepare toolchain if needed
 if [[ ${JOB_ARCHITECTURE} != "" ]]; then
@@ -67,6 +68,7 @@ cmake -DCL_INCLUDE_DIR=${TOP}/OpenCL-Headers \
       -DOPENCL_LIBRARIES="-lOpenCL -lpthread" \
       -DUSE_CL_EXPERIMENTAL=ON \
       -DGL_IS_SUPPORTED=${BUILD_OPENGL_TEST} \
-      ..
-make -j2
-
+      -DVULKAN_IS_SUPPORTED=${BUILD_VULKAN_TEST} \
+      -DVULKAN_INCLUDE_DIR=${TOP}/Vulkan-Headers/include/ \
+      -DVULKAN_LIB_DIR=${TOP}/Vulkan-Loader/build/loader/
+cmake --build . -j3
