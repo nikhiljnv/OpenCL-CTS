@@ -13,17 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "harness/compat.h"
+#include "testBase.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#include "procs.h"
-#include "harness/conversions.h"
-
-extern     MTdata          d;
+#include <cinttypes>
 
 // The tests we are running
 const char *tests[] = {
@@ -79,10 +76,105 @@ const char *test_names[] = {
     "!",  // 22
 };
 
-const size_t vector_aligns[] = {0, 1, 2, 4, 4,
-    8, 8, 8, 8,
-    16, 16, 16, 16,
-    16, 16, 16, 16};
+// =======================================
+// defined arithmetic inputs
+// =======================================
+
+// floor(sqrt(TYPE_MAX)): the largest operand whose square is representable.
+constexpr cl_long kIntMulBound = 46340;
+constexpr cl_long kLongMulBound = 3037000499LL;
+// A scalar ushort is promoted to int before the multiply, so the product has to
+// fit in an int rather than in a ushort.
+constexpr cl_ulong kUShortMulBound = 46340;
+
+// Writes `count` random values in [-bound, bound] to each operand, then seeds
+// the leading elements with the cross product of the corner values, mirroring
+// what the unbounded init_*_data() generators do.
+template <typename T>
+static void fill_bounded_signed(void *inputA, void *inputB, size_t count,
+                                cl_long bound, MTdata d)
+{
+    T *a = (T *)inputA;
+    T *b = (T *)inputB;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        a[i] = (T)get_random_long(-bound, bound, d);
+        b[i] = (T)get_random_long(-bound, bound, d);
+    }
+
+    const cl_long corners[] = { 0, -1, 1, -bound, bound };
+    const size_t num_corners = sizeof(corners) / sizeof(corners[0]);
+    size_t index = 0;
+    for (size_t x = 0; x < num_corners; x++)
+        for (size_t y = 0; y < num_corners && index < count; y++)
+        {
+            a[index] = (T)corners[x];
+            b[index] = (T)corners[y];
+            index++;
+        }
+}
+
+template <typename T>
+static void fill_bounded_unsigned(void *inputA, void *inputB, size_t count,
+                                  cl_ulong bound, MTdata d)
+{
+    T *a = (T *)inputA;
+    T *b = (T *)inputB;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        a[i] = (T)get_random_ulong(0, bound, d);
+        b[i] = (T)get_random_ulong(0, bound, d);
+    }
+
+    const cl_ulong corners[] = { 0, 1, bound };
+    const size_t num_corners = sizeof(corners) / sizeof(corners[0]);
+    size_t index = 0;
+    for (size_t x = 0; x < num_corners; x++)
+        for (size_t y = 0; y < num_corners && index < count; y++)
+        {
+            a[index] = (T)corners[x];
+            b[index] = (T)corners[y];
+            index++;
+        }
+}
+
+std::optional<DefinedArithmeticOp> get_defined_arithmetic_op(const char *opName)
+{
+    if (strcmp(opName, "+") == 0) return kDefinedAdd;
+    if (strcmp(opName, "-") == 0) return kDefinedSub;
+    if (strcmp(opName, "*") == 0) return kDefinedMul;
+
+    return std::nullopt;
+}
+
+void init_defined_arithmetic_data(ExplicitType type, DefinedArithmeticOp op,
+                                  size_t num_elements, void *inputA,
+                                  void *inputB, MTdata d)
+{
+    switch (type)
+    {
+        case kInt:
+            fill_bounded_signed<cl_int>(
+                inputA, inputB, num_elements,
+                op == kDefinedMul ? kIntMulBound : CL_INT_MAX / 2, d);
+            break;
+        case kLong:
+            fill_bounded_signed<cl_long>(
+                inputA, inputB, num_elements,
+                op == kDefinedMul ? kLongMulBound : CL_LONG_MAX / 2, d);
+            break;
+        case kUShort:
+            if (op == kDefinedMul)
+                fill_bounded_unsigned<cl_ushort>(inputA, inputB, num_elements,
+                                                 kUShortMulBound, d);
+            break;
+        default:
+            // Cannot overflow: keep the unbounded inputs.
+            break;
+    }
+}
 
 // =======================================
 // long
@@ -227,20 +319,50 @@ verify_long(int test, size_t vector_size, cl_long *inptrA, cl_long *inptrB, cl_l
             if (r != outptr[i]) {
                 // Shift is tricky
                 if (test == 8 || test == 9) {
-                    log_error("cl_long Verification failed at element %ld of %ld : 0x%llx %s 0x%llx = 0x%llx, got 0x%llx\n", i, n, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
-                    log_error("\t1) Vector shift failure at element %ld: original is 0x%llx %s %d (0x%llx)\n", i, inptrA[i], tests[test], (int)inptrB[i], inptrB[i]);
-                    log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %lld (0x%llx).\n", (int)log2(sizeof(cl_long)*8),  inptrB[i]&shift_mask, inptrB[i]&shift_mask);
+                    log_error("cl_long Verification failed at element %zu of "
+                              "%zu : 0x%" PRIx64 " %s 0x%" PRIx64
+                              " = 0x%" PRIx64 ", got 0x%" PRIx64 "\n",
+                              i, n, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
+                    log_error(
+                        "\t1) Vector shift failure at element %zu: original is "
+                        "0x%" PRIx64 " %s %d (0x%" PRIx64 ")\n",
+                        i, inptrA[i], tests[test], (int)inptrB[i], inptrB[i]);
+                    log_error("\t2) Take the %d LSBs of the shift to get the "
+                              "final shift amount %" PRId64 " (0x%" PRIx64
+                              ").\n",
+                              (int)log2(sizeof(cl_long) * 8),
+                              inptrB[i] & shift_mask, inptrB[i] & shift_mask);
                 }
                 else if (test == 10 || test == 11) {
 
-                    log_error("cl_long Verification failed at element %ld of %ld (%ld): 0x%llx %s 0x%llx = 0x%llx, got 0x%llx\n", i, n, j, inptrA[i], tests[test], inptrB[j], r, outptr[i]);
-                    log_error("\t1) Scalar shift failure at element %ld: original is 0x%llx %s %d (0x%llx)\n", i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
-                    log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %lld (0x%llx).\n", (int)log2(sizeof(cl_long)*8),  inptrB[j]&shift_mask, inptrB[j]&shift_mask);
+                    log_error("cl_long Verification failed at element %zu of "
+                              "%zu (%zu): 0x%" PRIx64 " %s 0x%" PRIx64
+                              " = 0x%" PRIx64 ", got 0x%" PRIx64 "\n",
+                              i, n, j, inptrA[i], tests[test], inptrB[j], r,
+                              outptr[i]);
+                    log_error(
+                        "\t1) Scalar shift failure at element %zu: original is "
+                        "0x%" PRIx64 " %s %d (0x%" PRIx64 ")\n",
+                        i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
+                    log_error("\t2) Take the %d LSBs of the shift to get the "
+                              "final shift amount %" PRId64 " (0x%" PRIx64
+                              ").\n",
+                              (int)log2(sizeof(cl_long) * 8),
+                              inptrB[j] & shift_mask, inptrB[j] & shift_mask);
                 } else if (test == 13) {
-                    log_error("cl_int Verification failed at element %ld (%ld): (0x%llx < 0x%llx) ? 0x%llx : 0x%llx = 0x%llx, got 0x%llx\n", i, j, inptrA[j], inptrB[j],
-                              inptrA[i], inptrB[i], r, outptr[i]);
+                    log_error("cl_int Verification failed at element %zu "
+                              "(%zu): (0x%" PRIx64 " < 0x%" PRIx64
+                              ") ? 0x%" PRIx64 " : 0x%" PRIx64 " = 0x%" PRIx64
+                              ", got 0x%" PRIx64 "\n",
+                              i, j, inptrA[j], inptrB[j], inptrA[i], inptrB[i],
+                              r, outptr[i]);
                 } else {
-                    log_error("cl_long Verification failed at element %ld of %ld: 0x%llx %s 0x%llx = 0x%llx, got 0x%llx\n", i, n, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
+                    log_error("cl_long Verification failed at element %zu of "
+                              "%zu: 0x%" PRIx64 " %s 0x%" PRIx64 " = 0x%" PRIx64
+                              ", got 0x%" PRIx64 "\n",
+                              i, n, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
                 }
                 count++;
                 if (count >= MAX_ERRORS_TO_PRINT) {
@@ -253,32 +375,6 @@ verify_long(int test, size_t vector_size, cl_long *inptrA, cl_long *inptrB, cl_l
 
     if (count) return -1; else return 0;
 }
-
-void
-init_long_data(uint64_t indx, int num_elements, cl_long *input_ptr[], MTdata d)
-{
-    cl_ulong        *p = (cl_ulong *)input_ptr[0];
-    int         j;
-
-    if (indx == 0) {
-        // Do the tricky values the first time around
-        fill_test_values( input_ptr[ 0 ], input_ptr[ 1 ], (size_t)num_elements, d );
-    } else {
-        // Then just test lots of random ones.
-        for (j=0; j<num_elements; j++) {
-            cl_uint a = (cl_uint)genrand_int32(d);
-            cl_uint b = (cl_uint)genrand_int32(d);
-            p[j] = ((cl_ulong)a <<32 | b);
-        }
-        p = (cl_ulong *)input_ptr[1];
-        for (j=0; j<num_elements; j++) {
-            cl_uint a = (cl_uint)genrand_int32(d);
-            cl_uint b = (cl_uint)genrand_int32(d);
-            p[j] = ((cl_ulong)a <<32 | b);
-        }
-    }
-}
-
 
 // =======================================
 // ulong
@@ -423,19 +519,49 @@ verify_ulong(int test, size_t vector_size, cl_ulong *inptrA, cl_ulong *inptrB, c
             if (r != outptr[i]) {
                 // Shift is tricky
                 if (test == 8 || test == 9) {
-                    log_error("cl_ulong Verification failed at element %ld of %ld: 0x%llx %s 0x%llx = 0x%llx, got 0x%llx\n", i, n, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
-                    log_error("\t1) Shift failure at element %ld: original is 0x%llx %s %d (0x%llx)\n", i, inptrA[i], tests[test], (int)inptrB[i], inptrB[i]);
-                    log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %llu (0x%llx).\n", (int)log2(sizeof(cl_ulong)*8),  inptrB[i]&shift_mask, inptrB[i]&shift_mask);
+                    log_error("cl_ulong Verification failed at element %zu of "
+                              "%zu: 0x%" PRIx64 " %s 0x%" PRIx64 " = 0x%" PRIx64
+                              ", got 0x%" PRIx64 "\n",
+                              i, n, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
+                    log_error("\t1) Shift failure at element %zu: original is "
+                              "0x%" PRIx64 " %s %d (0x%" PRIx64 ")\n",
+                              i, inptrA[i], tests[test], (int)inptrB[i],
+                              inptrB[i]);
+                    log_error("\t2) Take the %d LSBs of the shift to get the "
+                              "final shift amount %" PRIu64 " (0x%" PRIx64
+                              ").\n",
+                              (int)log2(sizeof(cl_ulong) * 8),
+                              inptrB[i] & shift_mask, inptrB[i] & shift_mask);
                 }
                 else if (test == 10 || test == 11) {
-                    log_error("cl_ulong Verification failed at element %ld of %ld (%ld): 0x%llx %s 0x%llx = 0x%llx, got 0x%llx\n", i, n, j, inptrA[i], tests[test], inptrB[j], r, outptr[i]);
-                    log_error("\t1) Scalar shift failure at element %ld: original is 0x%llx %s %d (0x%llx)\n", i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
-                    log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %lld (0x%llx).\n", (int)log2(sizeof(cl_long)*8),  inptrB[j]&shift_mask, inptrB[j]&shift_mask);
+                    log_error("cl_ulong Verification failed at element %zu of "
+                              "%zu (%zu): 0x%" PRIx64 " %s 0x%" PRIx64
+                              " = 0x%" PRIx64 ", got 0x%" PRIx64 "\n",
+                              i, n, j, inptrA[i], tests[test], inptrB[j], r,
+                              outptr[i]);
+                    log_error(
+                        "\t1) Scalar shift failure at element %zu: original is "
+                        "0x%" PRIx64 " %s %d (0x%" PRIx64 ")\n",
+                        i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
+                    log_error("\t2) Take the %d LSBs of the shift to get the "
+                              "final shift amount %" PRId64 " (0x%" PRIx64
+                              ").\n",
+                              (int)log2(sizeof(cl_long) * 8),
+                              inptrB[j] & shift_mask, inptrB[j] & shift_mask);
                 } else if (test == 13) {
-                    log_error("cl_int Verification failed at element %ld of %ld (%ld): (0x%llx < 0x%llx) ? 0x%llx : 0x%llx = 0x%llx, got 0x%llx\n", i, n, j, inptrA[j], inptrB[j],
-                              inptrA[i], inptrB[i], r, outptr[i]);
+                    log_error("cl_int Verification failed at element %zu of "
+                              "%zu (%zu): (0x%" PRIx64 " < 0x%" PRIx64
+                              ") ? 0x%" PRIx64 " : 0x%" PRIx64 " = 0x%" PRIx64
+                              ", got 0x%" PRIx64 "\n",
+                              i, n, j, inptrA[j], inptrB[j], inptrA[i],
+                              inptrB[i], r, outptr[i]);
                 } else {
-                    log_error("cl_ulong Verification failed at element %ld of %ld: 0x%llx %s 0x%llx = 0x%llx, got 0x%llx\n", i, n, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
+                    log_error("cl_ulong Verification failed at element %zu of "
+                              "%zu: 0x%" PRIx64 " %s 0x%" PRIx64 " = 0x%" PRIx64
+                              ", got 0x%" PRIx64 "\n",
+                              i, n, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
                 }
                 count++;
                 if (count >= MAX_ERRORS_TO_PRINT) {
@@ -447,39 +573,6 @@ verify_ulong(int test, size_t vector_size, cl_ulong *inptrA, cl_ulong *inptrB, c
     }
     if (count) return -1; else return 0;
 }
-
-void
-init_ulong_data(uint64_t indx, int num_elements, cl_ulong *input_ptr[], MTdata d)
-{
-    cl_ulong        *p = (cl_ulong *)input_ptr[0];
-    int            j;
-
-    if (indx == 0)
-    {
-        // Do the tricky values the first time around
-        fill_test_values( (cl_long*)input_ptr[ 0 ], (cl_long*)input_ptr[ 1 ], (size_t)num_elements, d );
-    }
-    else
-    {
-        // Then just test lots of random ones.
-        for (j=0; j<num_elements; j++)
-        {
-            cl_ulong a = genrand_int32(d);
-            cl_ulong b = genrand_int32(d);
-            // Fill in the top, bottom, and middle, remembering that random only sets 31 bits.
-            p[j] = (a <<32) | b;
-        }
-        p = (cl_ulong *)input_ptr[1];
-        for (j=0; j<num_elements; j++)
-        {
-            cl_ulong a = genrand_int32(d);
-            cl_ulong b = genrand_int32(d);
-            // Fill in the top, bottom, and middle, remembering that random only sets 31 bits.
-            p[j] = (a <<32) | b;
-        }
-    }
-}
-
 
 // =======================================
 // int
@@ -624,19 +717,37 @@ verify_int(int test, size_t vector_size, cl_int *inptrA, cl_int *inptrB, cl_int 
             if (r != outptr[i]) {
                 // Shift is tricky
                 if (test == 8 || test == 9) {
-                    log_error("cl_int Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
-                    log_error("\t1) Shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[i], inptrB[i]);
+                    log_error("cl_int Verification failed at element %zu: 0x%x "
+                              "%s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
+                    log_error("\t1) Shift failure at element %zu: original is "
+                              "0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[i],
+                              inptrB[i]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_int)*8),  inptrB[i]&shift_mask, inptrB[i]&shift_mask);
                 }
                 else if (test == 10 || test == 11) {
-                    log_error("cl_int Verification failed at element %ld (%ld): 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[i], tests[test], inptrB[j], r, outptr[i]);
-                    log_error("\t1) Scalar shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
+                    log_error("cl_int Verification failed at element %zu "
+                              "(%zu): 0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, j, inptrA[i], tests[test], inptrB[j], r,
+                              outptr[i]);
+                    log_error("\t1) Scalar shift failure at element %zu: "
+                              "original is 0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[j],
+                              inptrB[j]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_int)*8),  inptrB[j]&shift_mask, inptrB[j]&shift_mask);
                 } else if (test == 13) {
-                    log_error("cl_int Verification failed at element %ld (%ld): (0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[j], inptrB[j],
-                              inptrA[i], inptrB[i], r, outptr[i]);
+                    log_error(
+                        "cl_int Verification failed at element %zu (%zu): "
+                        "(0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n",
+                        i, j, inptrA[j], inptrB[j], inptrA[i], inptrB[i], r,
+                        outptr[i]);
                 } else {
-                    log_error("cl_int Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
+                    log_error("cl_int Verification failed at element %zu: 0x%x "
+                              "%s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
                 }
                 count++;
                 if (count >= MAX_ERRORS_TO_PRINT) {
@@ -649,32 +760,6 @@ verify_int(int test, size_t vector_size, cl_int *inptrA, cl_int *inptrB, cl_int 
 
     if (count) return -1; else return 0;
 }
-
-void
-init_int_data(uint64_t indx, int num_elements, cl_int *input_ptr[], MTdata d)
-{
-    static const cl_int specialCaseList[] = { 0, -1, 1, CL_INT_MIN, CL_INT_MIN + 1, CL_INT_MAX };
-    int            j;
-
-    // Set the inputs to a random number
-    for (j=0; j<num_elements; j++)
-    {
-        ((cl_int *)input_ptr[0])[j] = (cl_int)genrand_int32(d);
-        ((cl_int *)input_ptr[1])[j] = (cl_int)genrand_int32(d);
-    }
-
-    // Init the first few values to test special cases
-    {
-        size_t x, y, index = 0;
-        for( x = 0; x < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); x++ )
-            for( y = 0; y < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); y++ )
-            {
-                ((cl_int *)input_ptr[0])[index] = specialCaseList[x];
-                ((cl_int *)input_ptr[1])[index++] = specialCaseList[y];
-            }
-    }
-}
-
 
 // =======================================
 // uint
@@ -819,19 +904,37 @@ verify_uint(int test, size_t vector_size, cl_uint *inptrA, cl_uint *inptrB, cl_u
             if (r != outptr[i]) {
                 // Shift is tricky
                 if (test == 8 || test == 9) {
-                    log_error("cl_uint Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
-                    log_error("\t1) Shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[i], inptrB[i]);
+                    log_error("cl_uint Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
+                    log_error("\t1) Shift failure at element %zu: original is "
+                              "0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[i],
+                              inptrB[i]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_uint)*8),  inptrB[i]&shift_mask, inptrB[i]&shift_mask);
                 }
                 else if (test == 10 || test == 11) {
-                    log_error("cl_uint Verification failed at element %ld (%ld): 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[i], tests[test], inptrB[j], r, outptr[i]);
-                    log_error("\t1) Scalar shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
+                    log_error("cl_uint Verification failed at element %zu "
+                              "(%zu): 0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, j, inptrA[i], tests[test], inptrB[j], r,
+                              outptr[i]);
+                    log_error("\t1) Scalar shift failure at element %zu: "
+                              "original is 0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[j],
+                              inptrB[j]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_uint)*8),  inptrB[j]&shift_mask, inptrB[j]&shift_mask);
                 } else if (test == 13) {
-                    log_error("cl_int Verification failed at element %ld (%ld): (0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[j], inptrB[j],
-                              inptrA[i], inptrB[i], r, outptr[i]);
+                    log_error(
+                        "cl_int Verification failed at element %zu (%zu): "
+                        "(0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n",
+                        i, j, inptrA[j], inptrB[j], inptrA[i], inptrB[i], r,
+                        outptr[i]);
                 } else {
-                    log_error("cl_uint Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
+                    log_error("cl_uint Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
                 }
                 count++;
                 if (count >= MAX_ERRORS_TO_PRINT) {
@@ -842,32 +945,6 @@ verify_uint(int test, size_t vector_size, cl_uint *inptrA, cl_uint *inptrB, cl_u
         }
     }
     if (count) return -1; else return 0;
-}
-
-void
-init_uint_data(uint64_t indx, int num_elements, cl_uint *input_ptr[], MTdata d)
-{
-    static cl_uint specialCaseList[] = { 0, (cl_uint) CL_INT_MAX, (cl_uint) CL_INT_MAX + 1, CL_UINT_MAX-1, CL_UINT_MAX };
-    int            j;
-
-    // Set the first input to an incrementing number
-    // Set the second input to a random number
-    for (j=0; j<num_elements; j++)
-    {
-        ((cl_uint *)input_ptr[0])[j] = genrand_int32(d);
-        ((cl_uint *)input_ptr[1])[j] = genrand_int32(d);
-    }
-
-    // Init the first few values to test special cases
-    {
-        size_t x, y, index = 0;
-        for( x = 0; x < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); x++ )
-            for( y = 0; y < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); y++ )
-            {
-                ((cl_uint *)input_ptr[0])[index] = specialCaseList[x];
-                ((cl_uint *)input_ptr[1])[index++] = specialCaseList[y];
-            }
-    }
 }
 
 // =======================================
@@ -1015,19 +1092,37 @@ verify_short(int test, size_t vector_size, cl_short *inptrA, cl_short *inptrB, c
             if (r != outptr[i]) {
                 // Shift is tricky
                 if (test == 8 || test == 9) {
-                    log_error("cl_short Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
-                    log_error("\t1) Shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[i], inptrB[i]);
+                    log_error("cl_short Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
+                    log_error("\t1) Shift failure at element %zu: original is "
+                              "0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[i],
+                              inptrB[i]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_short)*8),  inptrB[i]&shift_mask, inptrB[i]&shift_mask);
                 }
                 else if (test == 10 || test == 11) {
-                    log_error("cl_short Verification failed at element %ld (%ld): 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[i], tests[test], inptrB[j], r, outptr[i]);
-                    log_error("\t1) Scalar shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
+                    log_error("cl_short Verification failed at element %zu "
+                              "(%zu): 0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, j, inptrA[i], tests[test], inptrB[j], r,
+                              outptr[i]);
+                    log_error("\t1) Scalar shift failure at element %zu: "
+                              "original is 0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[j],
+                              inptrB[j]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_short)*8),  inptrB[j]&shift_mask, inptrB[j]&shift_mask);
                 } else if (test == 13) {
-                    log_error("cl_int Verification failed at element %ld (%ld): (0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[j], inptrB[j],
-                              inptrA[i], inptrB[i], r, outptr[i]);
+                    log_error(
+                        "cl_int Verification failed at element %zu (%zu): "
+                        "(0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n",
+                        i, j, inptrA[j], inptrB[j], inptrA[i], inptrB[i], r,
+                        outptr[i]);
                 } else {
-                    log_error("cl_short Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
+                    log_error("cl_short Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
                 }
                 count++;
                 if (count >= MAX_ERRORS_TO_PRINT) {
@@ -1040,33 +1135,6 @@ verify_short(int test, size_t vector_size, cl_short *inptrA, cl_short *inptrB, c
 
     if (count) return -1; else return 0;
 }
-
-void
-init_short_data(uint64_t indx, int num_elements, cl_short *input_ptr[], MTdata d)
-{
-    static const cl_short specialCaseList[] = { 0, -1, 1, CL_SHRT_MIN, CL_SHRT_MIN + 1, CL_SHRT_MAX };
-    int            j;
-
-    // Set the inputs to a random number
-    for (j=0; j<num_elements; j++)
-    {
-        cl_uint bits = genrand_int32(d);
-        ((cl_short *)input_ptr[0])[j] = (cl_short) bits;
-        ((cl_short *)input_ptr[1])[j] = (cl_short) (bits >> 16);
-    }
-
-    // Init the first few values to test special cases
-    {
-        size_t x, y, index = 0;
-        for( x = 0; x < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); x++ )
-            for( y = 0; y < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); y++ )
-            {
-                ((cl_short *)input_ptr[0])[index] = specialCaseList[x];
-                ((cl_short *)input_ptr[1])[index++] = specialCaseList[y];
-            }
-    }
-}
-
 
 // =======================================
 // ushort
@@ -1213,19 +1281,37 @@ verify_ushort(int test, size_t vector_size, cl_ushort *inptrA, cl_ushort *inptrB
             if (r != outptr[i]) {
                 // Shift is tricky
                 if (test == 8 || test == 9) {
-                    log_error("cl_ushort Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
-                    log_error("\t1) Shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[i], inptrB[i]);
+                    log_error("cl_ushort Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
+                    log_error("\t1) Shift failure at element %zu: original is "
+                              "0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[i],
+                              inptrB[i]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_ushort)*8),  inptrB[i]&shift_mask, inptrB[i]&shift_mask);
                 }
                 else if (test == 10 || test == 11) {
-                    log_error("cl_ushort Verification failed at element %ld (%ld): 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[i], tests[test], inptrB[j], r, outptr[i]);
-                    log_error("\t1) Scalar shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
+                    log_error("cl_ushort Verification failed at element %zu "
+                              "(%zu): 0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, j, inptrA[i], tests[test], inptrB[j], r,
+                              outptr[i]);
+                    log_error("\t1) Scalar shift failure at element %zu: "
+                              "original is 0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[j],
+                              inptrB[j]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_ushort)*8),  inptrB[j]&shift_mask, inptrB[j]&shift_mask);
                 } else if (test == 13) {
-                    log_error("cl_int Verification failed at element %ld (%ld): (0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[j], inptrB[j],
-                              inptrA[i], inptrB[i], r, outptr[i]);
+                    log_error(
+                        "cl_int Verification failed at element %zu (%zu): "
+                        "(0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n",
+                        i, j, inptrA[j], inptrB[j], inptrA[i], inptrB[i], r,
+                        outptr[i]);
                 } else {
-                    log_error("cl_ushort Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
+                    log_error("cl_ushort Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
                 }
                 count++;
                 if (count >= MAX_ERRORS_TO_PRINT) {
@@ -1238,34 +1324,6 @@ verify_ushort(int test, size_t vector_size, cl_ushort *inptrA, cl_ushort *inptrB
 
     if (count) return -1; else return 0;
 }
-
-void
-init_ushort_data(uint64_t indx, int num_elements, cl_ushort *input_ptr[], MTdata d)
-{
-    static const cl_ushort specialCaseList[] = { 0, -1, 1, CL_SHRT_MAX, CL_SHRT_MAX + 1, CL_USHRT_MAX };
-    int            j;
-
-    // Set the inputs to a random number
-    for (j=0; j<num_elements; j++)
-    {
-        cl_uint bits = genrand_int32(d);
-        ((cl_ushort *)input_ptr[0])[j] = (cl_ushort) bits;
-        ((cl_ushort *)input_ptr[1])[j] = (cl_ushort) (bits >> 16);
-    }
-
-    // Init the first few values to test special cases
-    {
-        size_t x, y, index = 0;
-        for( x = 0; x < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); x++ )
-            for( y = 0; y < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); y++ )
-            {
-                ((cl_ushort *)input_ptr[0])[index] = specialCaseList[x];
-                ((cl_ushort *)input_ptr[1])[index++] = specialCaseList[y];
-            }
-    }
-}
-
-
 
 // =======================================
 // char
@@ -1413,19 +1471,37 @@ verify_char(int test, size_t vector_size, cl_char *inptrA, cl_char *inptrB, cl_c
             if (r != outptr[i]) {
                 // Shift is tricky
                 if (test == 8 || test == 9) {
-                    log_error("cl_char Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
-                    log_error("\t1) Shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[i], inptrB[i]);
+                    log_error("cl_char Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
+                    log_error("\t1) Shift failure at element %zu: original is "
+                              "0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[i],
+                              inptrB[i]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_char)*8),  inptrB[i]&shift_mask, inptrB[i]&shift_mask);
                 }
                 else if (test == 10 || test == 11) {
-                    log_error("cl_char Verification failed at element %ld (%ld): 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[i], tests[test], inptrB[j], r, outptr[i]);
-                    log_error("\t1) Scalar shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
+                    log_error("cl_char Verification failed at element %zu "
+                              "(%zu): 0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, j, inptrA[i], tests[test], inptrB[j], r,
+                              outptr[i]);
+                    log_error("\t1) Scalar shift failure at element %zu: "
+                              "original is 0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[j],
+                              inptrB[j]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_long)*8),  inptrB[j]&shift_mask, inptrB[j]&shift_mask);
                 } else if (test == 13) {
-                    log_error("cl_int Verification failed at element %ld (%ld): (0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[j], inptrB[j],
-                              inptrA[i], inptrB[i], r, outptr[i]);
+                    log_error(
+                        "cl_int Verification failed at element %zu (%zu): "
+                        "(0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n",
+                        i, j, inptrA[j], inptrB[j], inptrA[i], inptrB[i], r,
+                        outptr[i]);
                 } else {
-                    log_error("cl_char Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
+                    log_error("cl_char Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
                 }
                 count++;
                 if (count >= MAX_ERRORS_TO_PRINT) {
@@ -1437,42 +1513,6 @@ verify_char(int test, size_t vector_size, cl_char *inptrA, cl_char *inptrB, cl_c
     }
     if (count) return -1; else return 0;
 }
-
-void
-init_char_data(uint64_t indx, int num_elements, cl_char *input_ptr[], MTdata d)
-{
-    static const cl_char specialCaseList[] = { 0, -1, 1, CL_CHAR_MIN, CL_CHAR_MIN + 1, CL_CHAR_MAX };
-    int            j;
-
-    // FIXME comment below might not be appropriate for
-    // vector data.  Yes, checking every scalar char against every
-    // scalar char is only 2^16 ~ 64000 tests, but once we get to vec3,
-    // vec4, vec8...
-
-    // in the meantime, this means I can use [] to access vec3 instead of
-    // vload3 / vstore3 :D
-
-    // FIXME: we really should just check every char against every char here
-    // Set the inputs to a random number
-    for (j=0; j<num_elements; j++)
-    {
-        cl_uint bits = genrand_int32(d);
-        ((cl_char *)input_ptr[0])[j] = (cl_char) bits;
-        ((cl_char *)input_ptr[1])[j] = (cl_char) (bits >> 16);
-    }
-
-    // Init the first few values to test special cases
-    {
-        size_t x, y, index = 0;
-        for( x = 0; x < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); x++ )
-            for( y = 0; y < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); y++ )
-            {
-                ((cl_char *)input_ptr[0])[index] = specialCaseList[x];
-                ((cl_char *)input_ptr[1])[index++] = specialCaseList[y];
-            }
-    }
-}
-
 
 // =======================================
 // uchar
@@ -1619,19 +1659,37 @@ verify_uchar(int test, size_t vector_size, cl_uchar *inptrA, cl_uchar *inptrB, c
             if (r != outptr[i]) {
                 // Shift is tricky
                 if (test == 8 || test == 9) {
-                    log_error("cl_uchar Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
-                    log_error("\t1) Shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[i], inptrB[i]);
+                    log_error("cl_uchar Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
+                    log_error("\t1) Shift failure at element %zu: original is "
+                              "0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[i],
+                              inptrB[i]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_uchar)*8),  inptrB[i]&shift_mask, inptrB[i]&shift_mask);
                 }
                 else if (test == 10 || test == 11) {
-                    log_error("cl_uchar Verification failed at element %ld (%ld): 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[i], tests[test], inptrB[j], r, outptr[i]);
-                    log_error("\t1) Scalar shift failure at element %ld: original is 0x%x %s %d (0x%x)\n", i, inptrA[i], tests[test], (int)inptrB[j], inptrB[j]);
+                    log_error("cl_uchar Verification failed at element %zu "
+                              "(%zu): 0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, j, inptrA[i], tests[test], inptrB[j], r,
+                              outptr[i]);
+                    log_error("\t1) Scalar shift failure at element %zu: "
+                              "original is 0x%x %s %d (0x%x)\n",
+                              i, inptrA[i], tests[test], (int)inptrB[j],
+                              inptrB[j]);
                     log_error("\t2) Take the %d LSBs of the shift to get the final shift amount %d (0x%x).\n", (int)log2(sizeof(cl_uchar)*8),  inptrB[j]&shift_mask, inptrB[j]&shift_mask);
                 } else if (test == 13) {
-                    log_error("cl_int Verification failed at element %ld (%ld): (0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n", i, j, inptrA[j], inptrB[j],
-                              inptrA[i], inptrB[i], r, outptr[i]);
+                    log_error(
+                        "cl_int Verification failed at element %zu (%zu): "
+                        "(0x%x < 0x%x) ? 0x%x : 0x%x = 0x%x, got 0x%x\n",
+                        i, j, inptrA[j], inptrB[j], inptrA[i], inptrB[i], r,
+                        outptr[i]);
                 } else {
-                    log_error("cl_uchar Verification failed at element %ld: 0x%x %s 0x%x = 0x%x, got 0x%x\n", i, inptrA[i], tests[test], inptrB[i], r, outptr[i]);
+                    log_error("cl_uchar Verification failed at element %zu: "
+                              "0x%x %s 0x%x = 0x%x, got 0x%x\n",
+                              i, inptrA[i], tests[test], inptrB[i], r,
+                              outptr[i]);
                 }
                 count++;
                 if (count >= MAX_ERRORS_TO_PRINT) {
@@ -1644,32 +1702,3 @@ verify_uchar(int test, size_t vector_size, cl_uchar *inptrA, cl_uchar *inptrB, c
 
     if (count) return -1; else return 0;
 }
-
-void
-init_uchar_data(uint64_t indx, int num_elements, cl_uchar *input_ptr[], MTdata d)
-{
-    static const cl_uchar specialCaseList[] = { 0, -1, 1, CL_CHAR_MAX, CL_CHAR_MAX + 1, CL_UCHAR_MAX };
-    int            j;
-
-    // FIXME: we really should just check every char against every char here
-
-    // Set the inputs to a random number
-    for (j=0; j<num_elements; j++)
-    {
-        cl_uint bits = genrand_int32(d);
-        ((cl_uchar *)input_ptr[0])[j] = (cl_uchar) bits;
-        ((cl_uchar *)input_ptr[1])[j] = (cl_uchar) (bits >> 16);
-    }
-
-    // Init the first few values to test special cases
-    {
-        size_t x, y, index = 0;
-        for( x = 0; x < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); x++ )
-            for( y = 0; y < sizeof( specialCaseList ) / sizeof( specialCaseList[0] ); y++ )
-            {
-                ((cl_uchar *)input_ptr[0])[index] = specialCaseList[x];
-                ((cl_uchar *)input_ptr[1])[index++] = specialCaseList[y];
-            }
-    }
-}
-

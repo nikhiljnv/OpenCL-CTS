@@ -16,32 +16,42 @@
 #ifndef _testHarness_h
 #define _testHarness_h
 
-#include "threadTesting.h"
 #include "clImageHelper.h"
 #include <string>
 #include <sstream>
 
 #include <string>
+#include <vector>
+#include <type_traits>
 
 class Version {
 public:
     Version(): m_major(0), m_minor(0) {}
-    Version(int major, int minor): m_major(major), m_minor(minor) {}
-    bool operator>(const Version &rhs) const { return to_int() > rhs.to_int(); }
-    bool operator<(const Version &rhs) const { return to_int() < rhs.to_int(); }
+
+    Version(cl_uint major, cl_uint minor): m_major(major), m_minor(minor) {}
+    int get_major() const { return m_major; }
+    int get_minor() const { return m_minor; }
+    bool operator>(const Version &rhs) const
+    {
+        return to_uint() > rhs.to_uint();
+    }
+    bool operator<(const Version &rhs) const
+    {
+        return to_uint() < rhs.to_uint();
+    }
     bool operator<=(const Version &rhs) const
     {
-        return to_int() <= rhs.to_int();
+        return to_uint() <= rhs.to_uint();
     }
     bool operator>=(const Version &rhs) const
     {
-        return to_int() >= rhs.to_int();
+        return to_uint() >= rhs.to_uint();
     }
     bool operator==(const Version &rhs) const
     {
-        return to_int() == rhs.to_int();
+        return to_uint() == rhs.to_uint();
     }
-    int to_int() const { return m_major * 10 + m_minor; }
+    cl_uint to_uint() const { return m_major * 10 + m_minor; }
     std::string to_string() const
     {
         std::stringstream ss;
@@ -50,10 +60,12 @@ public:
     }
 
 private:
-    int m_major;
-    int m_minor;
+    cl_uint m_major;
+    cl_uint m_minor;
 };
 
+Version get_platform_cl_version(cl_platform_id platform);
+Version get_platform_cl_version(cl_device_id device);
 Version get_device_cl_version(cl_device_id device);
 
 #define ADD_TEST(fn)                                                           \
@@ -67,9 +79,12 @@ Version get_device_cl_version(cl_device_id device);
 
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
+typedef int (*test_function_pointer)(cl_device_id deviceID, cl_context context,
+                                     cl_command_queue queue, int num_elements);
+
 typedef struct test_definition
 {
-    basefn func;
+    test_function_pointer func;
     const char *name;
     Version min_version;
 } test_definition;
@@ -82,6 +97,91 @@ typedef enum test_status
     TEST_SKIP = 2,
     TEST_SKIPPED_ITSELF = -100,
 } test_status;
+
+struct test_harness_config
+{
+    int forceNoContextCreation;
+    int numElementsToUse;
+    cl_command_queue_properties queueProps;
+    unsigned numWorkerThreads;
+};
+
+
+struct test
+{
+    virtual test_function_pointer getFunction() = 0;
+};
+
+class test_registry {
+private:
+    std::vector<test *> m_tests;
+    std::vector<test_definition> m_definitions;
+
+public:
+    static test_registry &getInstance();
+
+    test_definition *definitions();
+
+    size_t num_tests();
+
+    void add_test(test *t, const char *name, Version version);
+    test_registry() {}
+};
+
+template <typename T> T *register_test(const char *name, Version version)
+{
+    T *t = new T();
+    test_registry::getInstance().add_test((test *)t, name, version);
+    return t;
+}
+
+#define REGISTER_TEST_VERSION(name, version)                                   \
+    extern int test_##name(cl_device_id device, cl_context context,            \
+                           cl_command_queue queue, int num_elements);          \
+    class test_##name##_class : public test {                                  \
+    private:                                                                   \
+        test_function_pointer fn;                                              \
+                                                                               \
+    public:                                                                    \
+        test_##name##_class(): fn(test_##name) {}                              \
+        test_function_pointer getFunction() { return fn; }                     \
+    };                                                                         \
+    test_##name##_class *var_##name =                                          \
+        register_test<test_##name##_class>(#name, version);                    \
+    int test_##name(cl_device_id device, cl_context context,                   \
+                    cl_command_queue queue, int num_elements)
+
+#define REGISTER_TEST(name) REGISTER_TEST_VERSION(name, Version(1, 2))
+
+#define REQUIRE_EXTENSION(name)                                                \
+    do                                                                         \
+    {                                                                          \
+        if (!is_extension_available(device, name))                             \
+        {                                                                      \
+            log_info(name                                                      \
+                     " is not supported on this device. Skipping test.\n");    \
+            return TEST_SKIPPED_ITSELF;                                        \
+        }                                                                      \
+    } while (0)
+
+// This is a macro rather than a function to be able to use and act like the
+// existing test_error macro.
+//
+// Not all tests need to use this macro, only those that don't use the
+// test harness compiler helpers.
+#define CHECK_COMPILER_AVAILABLE(DEVICE)                                       \
+    {                                                                          \
+        cl_bool compilerAvailable = CL_FALSE;                                  \
+        cl_int error = clGetDeviceInfo((DEVICE), CL_DEVICE_COMPILER_AVAILABLE, \
+                                       sizeof(compilerAvailable),              \
+                                       &compilerAvailable, NULL);              \
+        test_error(error, "Unable to query CL_DEVICE_COMPILER_AVAILABLE");     \
+        if (compilerAvailable == CL_FALSE)                                     \
+        {                                                                      \
+            log_info("Skipping test - no compiler is available.\n");           \
+            return TEST_SKIPPED_ITSELF;                                        \
+        }                                                                      \
+    }
 
 extern int gFailCount;
 extern int gTestCount;
@@ -110,14 +210,26 @@ extern int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
                                    cl_command_queue_properties queueProps,
                                    DeviceCheckFn deviceCheckFn);
 
+using ParseArgsFn = test_status (*)(int &argc, const char *argv[],
+                                    std::vector<std::string> &removed_args,
+                                    std::string &help_description);
+
+void update_argc_argv_from_args_list(std::vector<const char *> &argList,
+                                     int &argc, const char *argv[]);
+
+int runTestHarnessWithCheckAndParse(int argc, const char *argv[], int testNum,
+                                    test_definition testList[],
+                                    int forceNoContextCreation,
+                                    cl_command_queue_properties queueProps,
+                                    DeviceCheckFn deviceCheckFn,
+                                    ParseArgsFn parseArgsFn);
+
 // The command line parser used by runTestHarness to break up parameters into
 // calls to callTestFunctions
 extern int parseAndCallCommandLineTests(int argc, const char *argv[],
-                                        cl_device_id device, int testNum,
-                                        test_definition testList[],
-                                        int forceNoContextCreation,
-                                        cl_command_queue_properties queueProps,
-                                        int num_elements);
+                                        const char *args, cl_device_id device,
+                                        int testNum, test_definition testList[],
+                                        const test_harness_config &config);
 
 // Call this function if you need to do all the setup work yourself, and just
 // need the function list called/ managed.
@@ -129,21 +241,19 @@ extern int parseAndCallCommandLineTests(int argc, const char *argv[],
 //    resultTestList is an array of statuses which contain the result of each
 //    selected test testNum is the number of tests in testList, selectedTestList
 //    and resultTestList contextProps are used to create a testing context for
-//    each test deviceToUse and numElementsToUse are all just passed to each
+//    each test deviceToUse and config are all just passed to each
 //    test function
 extern void callTestFunctions(test_definition testList[],
                               unsigned char selectedTestList[],
                               test_status resultTestList[], int testNum,
                               cl_device_id deviceToUse,
-                              int forceNoContextCreation, int numElementsToUse,
-                              cl_command_queue_properties queueProps);
+                              const test_harness_config &config);
 
 // This function is called by callTestFunctions, once per function, to do setup,
 // call, logging and cleanup
-extern test_status
-callSingleTestFunction(test_definition test, cl_device_id deviceToUse,
-                       int forceNoContextCreation, int numElementsToUse,
-                       cl_command_queue_properties queueProps);
+extern test_status callSingleTestFunction(test_definition test,
+                                          cl_device_id deviceToUse,
+                                          const test_harness_config &config);
 
 ///// Miscellaneous steps
 
@@ -179,6 +289,41 @@ extern int gHasLong; // This is set to 1 if the device suppots long and ulong
 extern bool gCoreILProgram;
 
 extern cl_platform_id getPlatformFromDevice(cl_device_id deviceID);
+extern std::string get_platform_info_string(cl_platform_id platform,
+                                            cl_platform_info param_name);
+extern bool is_platform_extension_available(cl_platform_id platform,
+                                            const char *extensionName);
+enum InvalidObject
+{
+    Nullptr = 1 << 0,
+    ValidObjectWrongType = 1 << 1,
+};
+
+extern int gInvalidObject;
+
+
+template <typename T> std::vector<T> get_invalid_objects(cl_device_id device)
+{
+    std::vector<T> ret;
+    if ((gInvalidObject & InvalidObject::Nullptr)
+        && !(std::is_same<T, cl_platform_id>::value))
+    {
+        ret.push_back(nullptr);
+    }
+    if (gInvalidObject & InvalidObject::ValidObjectWrongType)
+    {
+        if (std::is_same<T, cl_device_id>::value)
+        {
+            cl_platform_id platform = getPlatformFromDevice(device);
+            ret.push_back(reinterpret_cast<T>(platform));
+        }
+        else
+        {
+            ret.push_back(reinterpret_cast<T>(device));
+        }
+    }
+    return ret;
+}
 
 #if !defined(__APPLE__)
 void memset_pattern4(void *, const void *, size_t);

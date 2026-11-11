@@ -17,17 +17,16 @@
 #include <string.h>
 #include "harness/testHarness.h"
 #include "harness/typeWrappers.h"
+#include "harness/parseParameters.h"
 
 #include <algorithm>
 #include <vector>
 
-#include "procs.h"
 #include "utils.h"
 #include <time.h>
 
 
 #ifdef CL_VERSION_2_0
-extern int gWimpyMode;
 static const char *helper_ndrange_1d_glo[] = {
     NL,
     "void block_fn(int len, __global atomic_uint* val)" NL,
@@ -130,8 +129,8 @@ static const char *helper_ndrange_2d_glo[] = {
     "}" NL,
     "" NL,
     "kernel void helper_ndrange_2d_glo(__global int* res, uint n, uint len, "
-    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global int* "
-    "val,  __global uint* ofs_arr)" NL,
+    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global "
+    "atomic_uint* val,  __global uint* ofs_arr)" NL,
     "{" NL,
     "  size_t tid = get_global_id(0);" NL,
     "  void (^kernelBlock)(void) = ^{ block_fn(len, val); };" NL,
@@ -157,8 +156,8 @@ static const char *helper_ndrange_2d_loc[] = {
     "}" NL,
     "" NL,
     "kernel void helper_ndrange_2d_loc(__global int* res, uint n, uint len, "
-    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global int* "
-    "val,  __global uint* ofs_arr)" NL,
+    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global "
+    "atomic_uint* val,  __global uint* ofs_arr)" NL,
     "{" NL,
     "  size_t tid = get_global_id(0);" NL,
     "  void (^kernelBlock)(void) = ^{ block_fn(len, val); };" NL,
@@ -194,8 +193,8 @@ static const char *helper_ndrange_2d_ofs[] = {
     "}" NL,
     "" NL,
     "kernel void helper_ndrange_2d_ofs(__global int* res, uint n, uint len, "
-    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global int* "
-    "val,  __global uint* ofs_arr)" NL,
+    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global "
+    "atomic_uint* val,  __global uint* ofs_arr)" NL,
     "{" NL,
     "  size_t tid = get_global_id(0);" NL,
     "  void (^kernelBlock)(void) = ^{ block_fn(len, val); };" NL,
@@ -234,8 +233,8 @@ static const char *helper_ndrange_3d_glo[] = {
     "}" NL,
     "" NL,
     "kernel void helper_ndrange_3d_glo(__global int* res, uint n, uint len, "
-    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global int* "
-    "val,  __global uint* ofs_arr)" NL,
+    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global "
+    "atomic_uint* val,  __global uint* ofs_arr)" NL,
     "{" NL,
     "  size_t tid = get_global_id(0);" NL,
     "  void (^kernelBlock)(void) = ^{ block_fn(len, val); };" NL,
@@ -267,8 +266,8 @@ static const char *helper_ndrange_3d_loc[] = {
     "}" NL,
     "" NL,
     "kernel void helper_ndrange_3d_loc(__global int* res, uint n, uint len, "
-    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global int* "
-    "val,  __global uint* ofs_arr)" NL,
+    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global "
+    "atomic_uint* val,  __global uint* ofs_arr)" NL,
     "{" NL,
     "  size_t tid = get_global_id(0);" NL,
     "  void (^kernelBlock)(void) = ^{ block_fn(len, val); };" NL,
@@ -307,8 +306,8 @@ static const char *helper_ndrange_3d_ofs[] = {
     "}" NL,
     "" NL,
     "kernel void helper_ndrange_3d_ofs(__global int* res, uint n, uint len, "
-    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global int* "
-    "val,  __global uint* ofs_arr)" NL,
+    "__global uint* glob_size_arr, __global uint* loc_size_arr, __global "
+    "atomic_uint* val,  __global uint* ofs_arr)" NL,
     "{" NL,
     "  size_t tid = get_global_id(0);" NL,
     "  void (^kernelBlock)(void) = ^{ block_fn(len, val); };" NL,
@@ -609,7 +608,7 @@ static int check_kernel_results(cl_int* results, cl_int len, std::vector<cl_uint
     return -1;
 }
 
-int test_enqueue_ndrange(cl_device_id device, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(enqueue_ndrange)
 {
     MTdata d;
     cl_uint i;
@@ -641,7 +640,9 @@ int test_enqueue_ndrange(cl_device_id device, cl_context context, cl_command_que
     };
 
     dev_queue = clCreateCommandQueueWithProperties(context, device, queue_prop_def, &err_ret);
-    test_error(err_ret, "clCreateCommandQueueWithProperties(CL_QUEUE_DEVICE|CL_QUEUE_DEFAULT) failed");
+    test_error(err_ret,
+               "clCreateCommandQueueWithProperties(CL_QUEUE_ON_DEVICE | "
+               "CL_QUEUE_ON_DEVICE_DEFAULT) failed");
 
     max_local_size = (max_local_size > MAX_GWS)? MAX_GWS: max_local_size;
     if(gWimpyMode)
@@ -698,7 +699,9 @@ int test_enqueue_ndrange(cl_device_id device, cl_context context, cl_command_que
             { sizeof(cl_mem), &mem4 },
         };
 
-        log_info("Running '%s' kernel (%d of %d) ...\n",  sources_ndrange_Xd[i].src.kernel_name, i + 1, num_kernels_ndrange_Xd);
+        log_info("Running '%s' kernel (%d of %zu) ...\n",
+                 sources_ndrange_Xd[i].src.kernel_name, i + 1,
+                 num_kernels_ndrange_Xd);
         err_ret = run_single_kernel_args(context, queue, sources_ndrange_Xd[i].src.lines, sources_ndrange_Xd[i].src.num_lines, sources_ndrange_Xd[i].src.kernel_name, kernel_results, sizeof(kernel_results), arr_size(args), args);
 
         cl_int *ptr = (cl_int *)clEnqueueMapBuffer(queue, mem3, CL_TRUE, CL_MAP_READ, 0, glob_results.size() * sizeof(cl_int), 0, 0, 0, &err_ret);
@@ -716,7 +719,8 @@ int test_enqueue_ndrange(cl_device_id device, cl_context context, cl_command_que
 
     if (failCnt > 0)
     {
-        log_error("ERROR: %d of %d kernels failed.\n", failCnt, num_kernels_ndrange_Xd);
+        log_error("ERROR: %zu of %zu kernels failed.\n", failCnt,
+                  num_kernels_ndrange_Xd);
     }
 
     return res;

@@ -16,16 +16,13 @@
 #ifndef _testBase_h
 #define _testBase_h
 
-#include "harness/compat.h"
-
-#include <stdio.h>
-#include <string.h>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <vector>
 
-#include "procs.h"
+#include <CL/cl.h>
+
+#include "harness/conversions.h"
+#include "harness/testHarness.h"
+#include "harness/typeWrappers.h"
 
 #endif // _testBase_h
-
-
-

@@ -23,49 +23,48 @@
 #include "test_config.h"
 #include "string.h"
 #include "harness/kernelHelpers.h"
-
+#include "harness/mathHelpers.h"
 #include "harness/testHarness.h"
 
 #define HALF_MIN 1.0p-14
-
 
 const char *vector_size_name_extensions[kVectorSizeCount+kStrangeVectorSizeCount] = { "", "2", "4", "8", "16", "3" };
 const char *vector_size_strings[kVectorSizeCount+kStrangeVectorSizeCount] = { "1", "2", "4", "8", "16", "3" };
 const char *align_divisors[kVectorSizeCount+kStrangeVectorSizeCount] = { "1", "2", "4", "8", "16", "4" };
 const char *align_types[kVectorSizeCount+kStrangeVectorSizeCount] = { "half", "int", "int2", "int4", "int8", "int2" };
 
+void *gIn_half = NULL;
+void *gOut_half = NULL;
+void *gOut_half_reference = NULL;
+void *gOut_half_reference_double = NULL;
+void *gIn_single = NULL;
+void *gOut_single = NULL;
+void *gOut_single_reference = NULL;
+void *gIn_double = NULL;
+// void *gOut_double = NULL;
+// void *gOut_double_reference = NULL;
+cl_mem gInBuffer_half = NULL;
+cl_mem gOutBuffer_half = NULL;
+cl_mem gInBuffer_single = NULL;
+cl_mem gOutBuffer_single = NULL;
+cl_mem gInBuffer_double = NULL;
+// cl_mem gOutBuffer_double = NULL;
 
-void            *gIn_half = NULL;
-void            *gOut_half = NULL;
-void            *gOut_half_reference = NULL;
-void            *gOut_half_reference_double = NULL;
-void            *gIn_single = NULL;
-void            *gOut_single = NULL;
-void            *gOut_single_reference = NULL;
-void            *gIn_double = NULL;
-// void            *gOut_double = NULL;
-// void            *gOut_double_reference = NULL;
-cl_mem          gInBuffer_half = NULL;
-cl_mem          gOutBuffer_half = NULL;
-cl_mem          gInBuffer_single = NULL;
-cl_mem          gOutBuffer_single = NULL;
-cl_mem          gInBuffer_double = NULL;
-// cl_mem          gOutBuffer_double = NULL;
-
-cl_context       gContext = NULL;
+cl_context gContext = NULL;
 cl_command_queue gQueue = NULL;
-uint32_t        gDeviceFrequency = 0;
-uint32_t        gComputeDevices = 0;
-size_t          gMaxThreadGroupSize = 0;
-size_t          gWorkGroupSize = 0;
-bool            gWimpyMode = false;
-int             gWimpyReductionFactor = 512;
-int             gTestDouble = 0;
+uint32_t gDeviceFrequency = 0;
+uint32_t gComputeDevices = 0;
+size_t gMaxThreadGroupSize = 0;
+size_t gWorkGroupSize = 0;
+int gWimpyReductionFactor = 512;
+int gTestDouble = 0;
+bool gHostReset = false;
+bool gTestAll = false;
 
 #if defined( __APPLE__ )
-int             gReportTimes = 1;
+int gReportTimes = 1;
 #else
-int             gReportTimes = 0;
+int gReportTimes = 0;
 #endif
 
 #pragma mark -
@@ -98,19 +97,8 @@ test_status InitCL( cl_device_id device )
     int hasDouble = is_extension_available(device, "cl_khr_fp64");
     gTestDouble ^= hasDouble;
 
-    //detect whether profile of the device is embedded
-    char profile[64] = "";
-    if( (error = clGetDeviceInfo( device, CL_DEVICE_PROFILE, sizeof(profile), profile, NULL ) ) )
-    {
-        vlog_error( "Unable to get device CL DEVICE PROFILE string. (%d) \n", error );
-    }
-    else if( strstr(profile, "EMBEDDED_PROFILE" ) )
-    {
-        gIsEmbedded = 1;
-    }
-
     vlog( "%d compute devices at %f GHz\n", gComputeDevices, (double) gDeviceFrequency / 1000. );
-    vlog( "Max thread group size is %lld.\n", (uint64_t) gMaxThreadGroupSize );
+    vlog("Max thread group size is %zu.\n", gMaxThreadGroupSize);
 
     gContext = clCreateContext( NULL, 1, &device, notify_callback, NULL, &error );
     if( NULL == gContext )
@@ -277,8 +265,7 @@ cl_uint numVecs(cl_uint count, int vectorSizeIdx, bool aligned) {
     if(aligned && g_arrVecSizes[vectorSizeIdx] == 3) {
         return count/4;
     }
-    return  (count + g_arrVecSizes[vectorSizeIdx] - 1)/
-    ( (g_arrVecSizes[vectorSizeIdx]) );
+    return div_round_up(count, g_arrVecSizes[vectorSizeIdx]);
 }
 
 cl_uint runsOverBy(cl_uint count, int vectorSizeIdx, bool aligned) {

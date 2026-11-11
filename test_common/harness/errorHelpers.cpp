@@ -105,6 +105,13 @@ const char *IGetErrorString(int clErrorCode)
         case CL_INVALID_SPEC_ID: return "CL_INVALID_SPEC_ID";
         case CL_MAX_SIZE_RESTRICTION_EXCEEDED:
             return "CL_MAX_SIZE_RESTRICTION_EXCEEDED";
+        case CL_INCOMPATIBLE_COMMAND_QUEUE_KHR:
+            return "CL_INCOMPATIBLE_COMMAND_QUEUE_KHR";
+        case CL_INVALID_SYNC_POINT_WAIT_LIST_KHR:
+            return "CL_INVALID_SYNC_POINT_WAIT_LIST_KHR";
+        case CL_INVALID_COMMAND_BUFFER_KHR:
+            return "CL_INVALID_COMMAND_BUFFER_KHR";
+        case CL_INVALID_SEMAPHORE_KHR: return "CL_INVALID_SEMAPHORE_KHR";
         default: return "(unknown)";
     }
 }
@@ -190,6 +197,8 @@ const char *GetChannelTypeName(cl_channel_type type)
         case CL_UNORM_SHORT_565: return "CL_UNORM_SHORT_565";
         case CL_UNORM_SHORT_555: return "CL_UNORM_SHORT_555";
         case CL_UNORM_INT_101010: return "CL_UNORM_INT_101010";
+        case CL_UNORM_INT_101010_2: return "CL_UNORM_INT_101010_2";
+        case CL_UNORM_INT_2_101010_EXT: return "CL_UNORM_INT_2_101010_EXT";
         case CL_SIGNED_INT8: return "CL_SIGNED_INT8";
         case CL_SIGNED_INT16: return "CL_SIGNED_INT16";
         case CL_SIGNED_INT32: return "CL_SIGNED_INT32";
@@ -202,6 +211,14 @@ const char *GetChannelTypeName(cl_channel_type type)
         case CL_SFIXED14_APPLE: return "CL_SFIXED14_APPLE";
 #endif
         case CL_UNORM_INT24: return "CL_UNORM_INT24";
+        case CL_UNSIGNED_INT_RAW10_EXT: return "CL_UNSIGNED_INT_RAW10_EXT";
+        case CL_UNSIGNED_INT_RAW12_EXT: return "CL_UNSIGNED_INT_RAW12_EXT";
+        case CL_UNSIGNED_INT10X6_EXT: return "CL_UNSIGNED_INT10X6_EXT";
+        case CL_UNSIGNED_INT12X4_EXT: return "CL_UNSIGNED_INT12X4_EXT";
+        case CL_UNSIGNED_INT14X2_EXT: return "CL_UNSIGNED_INT14X2_EXT";
+        case CL_UNORM_INT10X6_EXT: return "CL_UNORM_INT10X6_EXT";
+        case CL_UNORM_INT12X4_EXT: return "CL_UNORM_INT12X4_EXT";
+        case CL_UNORM_INT14X2_EXT: return "CL_UNORM_INT14X2_EXT";
         default: return NULL;
     }
 }
@@ -218,6 +235,8 @@ int IsChannelTypeSupported(cl_channel_type type)
         case CL_UNORM_SHORT_565:
         case CL_UNORM_SHORT_555:
         case CL_UNORM_INT_101010:
+        case CL_UNORM_INT_101010_2:
+        case CL_UNORM_INT_2_101010_EXT:
         case CL_SIGNED_INT8:
         case CL_SIGNED_INT16:
         case CL_SIGNED_INT32:
@@ -225,10 +244,16 @@ int IsChannelTypeSupported(cl_channel_type type)
         case CL_UNSIGNED_INT16:
         case CL_UNSIGNED_INT32:
         case CL_HALF_FLOAT:
-        case CL_FLOAT: return 1;
+        case CL_FLOAT:
 #ifdef CL_SFIXED14_APPLE
-        case CL_SFIXED14_APPLE: return 1;
+        case CL_SFIXED14_APPLE:
 #endif
+        case CL_UNSIGNED_INT10X6_EXT:
+        case CL_UNSIGNED_INT12X4_EXT:
+        case CL_UNSIGNED_INT14X2_EXT:
+        case CL_UNORM_INT10X6_EXT:
+        case CL_UNORM_INT12X4_EXT:
+        case CL_UNORM_INT14X2_EXT: return 1;
         default: return 0;
     }
 }
@@ -258,7 +283,22 @@ const char *GetDeviceTypeName(cl_device_type type)
     }
 }
 
-const char *GetDataVectorString(void *dataBuffer, size_t typeSize,
+const char *GetImageTypeName(cl_mem_object_type type)
+{
+    switch (type)
+    {
+        case CL_MEM_OBJECT_IMAGE1D: return "CL_MEM_OBJECT_IMAGE1D";
+        case CL_MEM_OBJECT_IMAGE2D: return "CL_MEM_OBJECT_IMAGE2D";
+        case CL_MEM_OBJECT_IMAGE3D: return "CL_MEM_OBJECT_IMAGE3D";
+        case CL_MEM_OBJECT_IMAGE1D_ARRAY: return "CL_MEM_OBJECT_IMAGE1D_ARRAY";
+        case CL_MEM_OBJECT_IMAGE1D_BUFFER:
+            return "CL_MEM_OBJECT_IMAGE1D_BUFFER";
+        case CL_MEM_OBJECT_IMAGE2D_ARRAY: return "CL_MEM_OBJECT_IMAGE2D_ARRAY";
+        default: return "(unknown)";
+    }
+}
+
+const char *GetDataVectorString(const void *dataBuffer, size_t typeSize,
                                 size_t vecSize, char *buffer)
 {
     static char scratch[1024];
@@ -266,7 +306,7 @@ const char *GetDataVectorString(void *dataBuffer, size_t typeSize,
 
     if (buffer == NULL) buffer = scratch;
 
-    unsigned char *p = (unsigned char *)dataBuffer;
+    const unsigned char *p = (const unsigned char *)dataBuffer;
     char *bPtr;
 
     buffer[0] = 0;
@@ -362,14 +402,13 @@ static float Ulp_Error_Half_Float(float test, double reference)
     }
 
     // reference is a normal power of two or a zero
-    int ulp_exp =
-        HALF_MANT_DIG - 1 - std::max(ilogb(reference) - 1, HALF_MIN_EXP - 1);
+    int ulp_exp = HALF_MANT_DIG - std::max(ilogb(reference), HALF_MIN_EXP);
 
     // Scale the exponent of the error
     return (float)scalbn(testVal - reference, ulp_exp);
 }
 
-float Ulp_Error_Half(cl_half test, float reference)
+float Ulp_Error_Half(cl_half test, double reference)
 {
     return Ulp_Error_Half_Float(cl_half_to_float(test), reference);
 }
@@ -444,8 +483,7 @@ float Ulp_Error(float test, double reference)
 
     // reference is a normal power of two or a zero
     // The unbiased exponent of the ulp unit place
-    int ulp_exp =
-        FLT_MANT_DIG - 1 - std::max(ilogb(reference) - 1, FLT_MIN_EXP - 1);
+    int ulp_exp = FLT_MANT_DIG - std::max(ilogb(reference), FLT_MIN_EXP);
 
     // Scale the exponent of the error
     return (float)scalbn(testVal - reference, ulp_exp);
@@ -528,8 +566,7 @@ float Ulp_Error_Double(double test, long double reference)
 
     // reference is a normal power of two or a zero
     // The unbiased exponent of the ulp unit place
-    int ulp_exp =
-        DBL_MANT_DIG - 1 - std::max(ilogbl(reference) - 1, DBL_MIN_EXP - 1);
+    int ulp_exp = DBL_MANT_DIG - std::max(ilogbl(reference), DBL_MIN_EXP);
 
     // Scale the exponent of the error
     float result = (float)scalbnl(testVal - reference, ulp_exp);
@@ -540,6 +577,39 @@ float Ulp_Error_Double(double test, long double reference)
         result += copysignf(0.5f, result);
 
     return result;
+}
+
+cl_int OutputBuildLog(cl_program program, const cl_device_id device)
+{
+    size_t size_ret;
+
+    // Get the build status
+    cl_build_status build_status;
+    cl_int error =
+        clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_STATUS,
+                              sizeof(build_status), &build_status, &size_ret);
+    test_error(error, "Unable to query build status");
+
+    // If the build failed then print the status, obtain the build log and
+    // print it.
+    if (build_status != CL_BUILD_SUCCESS)
+    {
+        log_error("ERROR: CL_PROGRAM_BUILD_STATUS=%d\n", (int)build_status);
+        error = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0,
+                                      nullptr, &size_ret);
+        test_error(error, "Unable to query build log size");
+
+        char *build_log = (char *)malloc(size_ret);
+        error = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG,
+                                      size_ret, build_log, &size_ret);
+        test_error(error, "Unable to query build log");
+
+        log_error("ERROR: CL_PROGRAM_BUILD_LOG:\n%s\n", build_log);
+
+        free(build_log);
+    }
+
+    return CL_SUCCESS;
 }
 
 cl_int OutputBuildLogs(cl_program program, cl_uint num_devices,
@@ -581,33 +651,8 @@ cl_int OutputBuildLogs(cl_program program, cl_uint num_devices,
         unsigned int i;
         for (i = 0; i < num_devices; i++)
         {
-
-            // Get the build status
-            cl_build_status build_status;
-            error = clGetProgramBuildInfo(
-                program, device_list[i], CL_PROGRAM_BUILD_STATUS,
-                sizeof(build_status), &build_status, &size_ret);
-            test_error(error, "Unable to query build status");
-
-            // If the build failed then log the status, and allocate the build
-            // log, log it and free it
-            if (build_status != CL_BUILD_SUCCESS)
-            {
-
-                log_error("ERROR: CL_PROGRAM_BUILD_STATUS=%d\n",
-                          (int)build_status);
-                error = clGetProgramBuildInfo(program, device_list[i],
-                                              CL_PROGRAM_BUILD_LOG, 0, NULL,
-                                              &size_ret);
-                test_error(error, "Unable to query build log size");
-                char *build_log = (char *)malloc(size_ret);
-                error = clGetProgramBuildInfo(program, device_list[i],
-                                              CL_PROGRAM_BUILD_LOG, size_ret,
-                                              build_log, &size_ret);
-                test_error(error, "Unable to query build log");
-                log_error("ERROR: CL_PROGRAM_BUILD_LOG:\n%s\n", build_log);
-                free(build_log);
-            }
+            error = OutputBuildLog(program, device_list[i]);
+            test_error(error, "OutputBuildLog failed");
         }
 
         // Was the number of devices given
@@ -625,6 +670,7 @@ cl_int OutputBuildLogs(cl_program program, cl_uint num_devices,
 const char *subtests_to_skip_with_offline_compiler[] = {
     "get_kernel_arg_info",
     "binary_create",
+    "binary_create_with_header",
     "load_program_source",
     "load_multistring_source",
     "load_two_kernel_source",
@@ -632,6 +678,9 @@ const char *subtests_to_skip_with_offline_compiler[] = {
     "load_null_terminated_multi_line_source",
     "load_null_terminated_partial_multi_line_source",
     "load_discreet_length_source",
+    "get_program_info_kernel_names",
+    "get_linked_program_info_kernel_names",
+    "get_program_info_mult_devices",
     "get_program_source",
     "get_program_build_info",
     "options_build_optimizations",
@@ -669,6 +718,7 @@ const char *subtests_to_skip_with_offline_compiler[] = {
     "execute_after_simple_compile_and_link_no_device_info",
     "execute_after_simple_library_with_link",
     "execute_after_two_file_link",
+    "link_error_returns_program",
     "simple_compile_only",
     "simple_compile_with_callback",
     "simple_library_only",

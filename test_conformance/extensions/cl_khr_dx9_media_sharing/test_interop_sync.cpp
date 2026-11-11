@@ -26,7 +26,7 @@ int interop_user_sync(cl_device_id deviceID, cl_context context,
     CResult result;
 
     // create device
-    std::auto_ptr<CDeviceWrapper> deviceWrapper;
+    std::unique_ptr<CDeviceWrapper> deviceWrapper;
     if (!DeviceCreate(adapterType, deviceWrapper))
     {
         result.ResultSub(CResult::TEST_ERROR);
@@ -72,7 +72,7 @@ int interop_user_sync(cl_device_id deviceID, cl_context context,
         }
 
         void *objectSharedHandle = 0;
-        std::auto_ptr<CSurfaceWrapper> surface;
+        std::unique_ptr<CSurfaceWrapper> surface;
         if (!MediaSurfaceCreate(
                 adapterType, width, height, surfaceFormat, *deviceWrapper,
                 surface, (sharedHandle == SHARED_HANDLE_ENABLED) ? true : false,
@@ -233,7 +233,7 @@ int interop_user_sync(cl_device_id deviceID, cl_context context,
 
         error = clEnqueueAcquireDX9MediaSurfacesKHR(
             cmdQueue, static_cast<cl_uint>(memObjList.size()),
-            &memObjList.at(0), 0, 0, 0);
+            &memObjList.at(0), 0, NULL, NULL);
         if (error != CL_SUCCESS)
         {
             log_error("clEnqueueAcquireDX9MediaSurfacesKHR failed: %s\n",
@@ -273,7 +273,7 @@ int interop_user_sync(cl_device_id deviceID, cl_context context,
 
         error = clEnqueueReleaseDX9MediaSurfacesKHR(
             cmdQueue, static_cast<cl_uint>(memObjList.size()),
-            &memObjList.at(0), 0, 0, 0);
+            &memObjList.at(0), 0, NULL, NULL);
         if (error != CL_SUCCESS)
         {
             log_error("clEnqueueReleaseDX9MediaSurfacesKHR failed: %s\n",
@@ -327,8 +327,7 @@ int interop_user_sync(cl_device_id deviceID, cl_context context,
     return result.Result();
 }
 
-int test_interop_user_sync(cl_device_id deviceID, cl_context context,
-                           cl_command_queue queue, int num_elements)
+REGISTER_TEST(interop_user_sync)
 {
     const unsigned int WIDTH = 256;
     const unsigned int HEIGHT = 256;
@@ -382,7 +381,7 @@ int test_interop_user_sync(cl_device_id deviceID, cl_context context,
                             continue;
 
                         if (interop_user_sync(
-                                deviceID, context, queue, num_elements, WIDTH,
+                                device, context, queue, num_elements, WIDTH,
                                 HEIGHT, contextFuncs[contextFuncIdx],
                                 adapters[adapterIdx], formats[formatIdx],
                                 sharedHandleTypes[sharedHandleIdx],

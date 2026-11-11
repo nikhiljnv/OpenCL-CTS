@@ -16,6 +16,7 @@
 #ifndef _typeWrappers_h
 #define _typeWrappers_h
 
+#include <cstddef>
 #if !defined(_WIN32)
 #include <sys/mman.h>
 #endif
@@ -144,6 +145,62 @@ using clSamplerWrapper =
 
 using clEventWrapper =
     wrapper_details::Wrapper<cl_event, clRetainEvent, clReleaseEvent>;
+
+class clSVMWrapper {
+    void *Ptr = nullptr;
+    cl_context Ctx = nullptr;
+
+public:
+    clSVMWrapper() = default;
+
+    clSVMWrapper(cl_context C, size_t Size,
+                 cl_svm_mem_flags F = CL_MEM_READ_WRITE)
+        : Ctx(C)
+    {
+        Ptr = clSVMAlloc(C, F, Size, 0);
+    }
+
+    clSVMWrapper &operator=(void *other) = delete;
+    clSVMWrapper(clSVMWrapper const &other) = delete;
+    clSVMWrapper &operator=(clSVMWrapper const &other) = delete;
+    clSVMWrapper(clSVMWrapper &&other)
+    {
+        Ptr = other.Ptr;
+        Ctx = other.Ctx;
+        other.Ptr = nullptr;
+        other.Ctx = nullptr;
+    }
+    clSVMWrapper &operator=(clSVMWrapper &&other)
+    {
+        Ptr = other.Ptr;
+        Ctx = other.Ctx;
+        other.Ptr = nullptr;
+        other.Ctx = nullptr;
+        return *this;
+    }
+
+    ~clSVMWrapper()
+    {
+        if (Ptr) clSVMFree(Ctx, Ptr);
+    }
+
+    bool operator==(const clSVMWrapper &other) const noexcept
+    {
+        return Ctx == other.Ctx && Ptr == other.Ptr;
+    }
+
+    bool operator!=(const clSVMWrapper &other) const noexcept
+    {
+        return !(*this == other);
+    }
+
+    bool operator==(std::nullptr_t) const noexcept { return Ptr == nullptr; }
+
+    bool operator!=(std::nullptr_t) const noexcept { return Ptr != nullptr; }
+
+    void *operator()() const { return Ptr; }
+};
+
 
 class clProtectedImage {
 public:
@@ -333,6 +390,26 @@ public:
     operator T *() { return (T *)ptr; }
 
     size_t getSize() const { return allocsize; };
+};
+
+// scope guard helper to ensure proper releasing of sub devices
+struct SubDevicesScopeGuarded
+{
+    SubDevicesScopeGuarded(const cl_int dev_count)
+    {
+        sub_devices.resize(dev_count);
+    }
+    ~SubDevicesScopeGuarded()
+    {
+        for (auto &device : sub_devices)
+        {
+            cl_int err = clReleaseDevice(device);
+            if (err != CL_SUCCESS)
+                log_error("\n Releasing sub-device failed \n");
+        }
+    }
+
+    std::vector<cl_device_id> sub_devices;
 };
 
 #endif // _typeWrappers_h

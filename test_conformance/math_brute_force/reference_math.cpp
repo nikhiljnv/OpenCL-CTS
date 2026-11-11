@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017 The Khronos Group Inc.
+// Copyright (c) 2017-2024 The Khronos Group Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 #include "harness/compat.h"
 
 #include <climits>
+#include <float.h>
 
 #if !defined(_WIN32)
 #include <cstring>
@@ -25,12 +26,10 @@
 
 #include "utility.h"
 
-#if defined(__SSE__)                                                           \
-    || (defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64)))
+#if defined(__SSE__) || _M_IX86_FP == 1
 #include <xmmintrin.h>
 #endif
-#if defined(__SSE2__)                                                          \
-    || (defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64)))
+#if defined(__SSE2__) || _M_IX86_FP == 2 || defined(_M_X64)
 #include <emmintrin.h>
 #endif
 
@@ -691,7 +690,7 @@ double reference_rootn(double x, int i)
     double sign = x;
     x = reference_fabs(x);
     x = reference_exp2(reference_log2(x) / (double)i);
-    return reference_copysignd(x, sign);
+    return reference_copysign(x, sign);
 }
 
 double reference_rsqrt(double x) { return 1.0 / reference_sqrt(x); }
@@ -707,7 +706,7 @@ double reference_sinpi(double x)
         r = 1 - r;
 
     // sinPi zeros have the same sign as x
-    if (r == 0.0) return reference_copysignd(0.0, x);
+    if (r == 0.0) return reference_copysign(0.0, x);
 
     return reference_sin(r * M_PI);
 }
@@ -717,15 +716,15 @@ double reference_relaxed_sinpi(double x) { return reference_sinpi(x); }
 double reference_tanpi(double x)
 {
     // set aside the sign  (allows us to preserve sign of -0)
-    double sign = reference_copysignd(1.0, x);
+    double sign = reference_copysign(1.0, x);
     double z = reference_fabs(x);
 
     // if big and even  -- caution: only works if x only has single precision
-    if (z >= HEX_DBL(+, 1, 0, +, 24))
+    if (!(z < HEX_DBL(+, 1, 0, +, 24)))
     {
-        if (z == INFINITY) return x - x; // nan
+        if (!isfinite(z)) return x - x; // nan
 
-        return reference_copysignd(
+        return reference_copysign(
             0.0, x); // tanpi ( n ) is copysign( 0.0, n)  for even integers n.
     }
 
@@ -739,7 +738,7 @@ double reference_tanpi(double x)
     if ((i & 1) && z == 0.0) sign = -sign;
 
     // track changes to the sign
-    sign *= reference_copysignd(1.0, z); // really should just be an xor
+    sign *= reference_copysign(1.0, z); // really should just be an xor
     z = reference_fabs(z); // remove the sign again
 
     // reduce once more
@@ -855,14 +854,15 @@ double reference_add(double x, double y)
     volatile float a = (float)x;
     volatile float b = (float)y;
 
-#if defined(__SSE__)                                                           \
-    || (defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64)))
+#if defined(__SSE__) || _M_IX86_FP == 1
     // defeat x87
     __m128 va = _mm_set_ss((float)a);
     __m128 vb = _mm_set_ss((float)b);
     va = _mm_add_ss(va, vb);
     _mm_store_ss((float *)&a, va);
-#elif defined(__PPC__)
+#elif defined(__PPC__) || defined(__riscv)
+    // RISC-V CPUs with default 'f' fp32 extension do not support any way to
+    // enable/disable FTZ mode, subnormals are always handled without flushing.
     // Most Power host CPUs do not support the non-IEEE mode (NI) which flushes
     // denorm's to zero. As such, the reference add with FTZ must be emulated in
     // sw.
@@ -879,7 +879,7 @@ double reference_add(double x, double y)
         } ub;
         ub.d = b;
         cl_uint mantA, mantB;
-        cl_ulong addendA, addendB, sum;
+        cl_ulong addendA, addendB;
         int expA = extractf(a, &mantA);
         int expB = extractf(b, &mantB);
         cl_uint signA = ua.u & 0x80000000U;
@@ -953,8 +953,7 @@ double reference_subtract(double x, double y)
 {
     volatile float a = (float)x;
     volatile float b = (float)y;
-#if defined(__SSE__)                                                           \
-    || (defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64)))
+#if defined(__SSE__) || _M_IX86_FP == 1
     // defeat x87
     __m128 va = _mm_set_ss((float)a);
     __m128 vb = _mm_set_ss((float)b);
@@ -966,18 +965,19 @@ double reference_subtract(double x, double y)
     return a;
 }
 
+double reference_negation(double v) { return -v; }
+
 double reference_multiply(double x, double y)
 {
     volatile float a = (float)x;
     volatile float b = (float)y;
-#if defined(__SSE__)                                                           \
-    || (defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64)))
+#if defined(__SSE__) || _M_IX86_FP == 1
     // defeat x87
     __m128 va = _mm_set_ss((float)a);
     __m128 vb = _mm_set_ss((float)b);
     va = _mm_mul_ss(va, vb);
     _mm_store_ss((float *)&a, va);
-#elif defined(__PPC__)
+#elif defined(__PPC__) || defined(__riscv)
     // Most Power host CPUs do not support the non-IEEE mode (NI) which flushes
     // denorm's to zero. As such, the reference multiply with FTZ must be
     // emulated in sw.
@@ -1070,7 +1070,7 @@ int reference_signbit(float x) { return 0 != signbit(x); }
 // Missing functions for win32
 
 
-float reference_copysign(float x, float y)
+float reference_copysignf(float x, float y)
 {
     union {
         float f;
@@ -1084,7 +1084,7 @@ float reference_copysign(float x, float y)
 }
 
 
-double reference_copysignd(double x, double y)
+double reference_copysign(double x, double y)
 {
     union {
         double f;
@@ -1101,10 +1101,10 @@ double reference_copysignd(double x, double y)
 double reference_round(double x)
 {
     double absx = reference_fabs(x);
-    if (absx < 0.5) return reference_copysignd(0.0, x);
+    if (absx < 0.5) return reference_copysign(0.0, x);
 
     if (absx < HEX_DBL(+, 1, 0, +, 53))
-        x = reference_trunc(x + reference_copysignd(0.5, x));
+        x = reference_trunc(x + reference_copysign(0.5, x));
 
     return x;
 }
@@ -1115,7 +1115,7 @@ double reference_trunc(double x)
     {
         cl_long l = (cl_long)x;
 
-        return reference_copysignd((double)l, x);
+        return reference_copysign((double)l, x);
     }
 
     return x;
@@ -1132,16 +1132,16 @@ double reference_trunc(double x)
 
 double reference_cbrt(double x)
 {
-    return reference_copysignd(reference_pow(reference_fabs(x), 1.0 / 3.0), x);
+    return reference_copysign(reference_pow(reference_fabs(x), 1.0 / 3.0), x);
 }
 
 double reference_rint(double x)
 {
     if (reference_fabs(x) < HEX_DBL(+, 1, 0, +, 52))
     {
-        double magic = reference_copysignd(HEX_DBL(+, 1, 0, +, 52), x);
+        double magic = reference_copysign(HEX_DBL(+, 1, 0, +, 52), x);
         double rounded = (x + magic) - magic;
-        x = reference_copysignd(rounded, x);
+        x = reference_copysign(rounded, x);
     }
 
     return x;
@@ -1174,7 +1174,7 @@ double reference_asinh(double x)
     double absx = reference_fabs(x);
     if (absx < HEX_DBL(+, 1, 0, -, 28)) return x;
 
-    double sign = reference_copysignd(1.0, x);
+    double sign = reference_copysign(1.0, x);
 
     if (absx > HEX_DBL(+, 1, 0, +, 28))
         return sign
@@ -1206,7 +1206,7 @@ double reference_atanh(double x)
      */
     if (isnan(x)) return x + x;
 
-    double signed_half = reference_copysignd(0.5, x);
+    double signed_half = reference_copysign(0.5, x);
     x = reference_fabs(x);
     if (x > 1.0) return cl_make_nan();
 
@@ -1223,6 +1223,8 @@ double reference_relaxed_exp2(double x) { return reference_exp2(x); }
 double reference_exp2(double x)
 { // Note: only suitable for verifying single precision. Doesn't have range of a
   // full double exp2 implementation.
+    if (isnan(x)) return x;
+
     if (x == 0.0) return 1.0;
 
     // separate x into fractional and integer parts
@@ -1641,6 +1643,7 @@ double reference_expm1(double x)
 double reference_fmax(double x, double y)
 {
     if (isnan(y)) return x;
+    if (isnan(x)) return y;
 
     return x >= y ? x : y;
 }
@@ -1648,6 +1651,7 @@ double reference_fmax(double x, double y)
 double reference_fmin(double x, double y)
 {
     if (isnan(y)) return x;
+    if (isnan(x)) return y;
 
     return x <= y ? x : y;
 }
@@ -1856,6 +1860,13 @@ double reference_logb(double x)
 
 double reference_relaxed_reciprocal(double x) { return 1.0f / ((float)x); }
 
+long double reference_reciprocall(long double y)
+{
+    double dx = 1.0;
+    double dy = y;
+    return dx / dy;
+}
+
 double reference_reciprocal(double x) { return 1.0 / x; }
 
 double reference_remainder(double x, double y)
@@ -1949,7 +1960,8 @@ double reference_lgamma(double x)
         w6 = -1.63092934096575273989e-03; /* 0xBF5AB89D, 0x0B9E43E4 */
 
     static const double zero = 0.00000000000000000000e+00;
-    double t, y, z, nadj, p, p1, p2, p3, q, r, w;
+    double nadj = zero;
+    double t, y, z, p, p1, p2, p3, q, r, w;
     cl_int i, hx, lx, ix;
 
     union {
@@ -2108,6 +2120,275 @@ int reference_not(double x)
 {
     int r = !x;
     return r;
+}
+
+namespace {
+
+/*	$OpenBSD: polevll.c,v 1.2 2013/11/12 20:35:09 martynas Exp $	*/
+/*
+ * Copyright (c) 2008 Stephen L. Moshier <steve@moshier.net>
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+static long double P[8] = {
+    4.212760487471622013093E-5L, 4.542931960608009155600E-4L,
+    4.092666828394035500949E-3L, 2.385363243461108252554E-2L,
+    1.113062816019361559013E-1L, 3.629515436640239168939E-1L,
+    8.378004301573126728826E-1L, 1.000000000000000000009E0L,
+};
+static long double Q[9] = {
+    -1.397148517476170440917E-5L, 2.346584059160635244282E-4L,
+    -1.237799246653152231188E-3L, -7.955933682494738320586E-4L,
+    2.773706565840072979165E-2L,  -4.633887671244534213831E-2L,
+    -2.243510905670329164562E-1L, 4.150160950588455434583E-1L,
+    9.999999999999999999908E-1L,
+};
+
+// Largest positive argument handled by the long-double Stirling path before
+// tgamma overflows in the host long-double format.
+#if LDBL_MANT_DIG == DBL_MANT_DIG && LDBL_MAX_EXP == DBL_MAX_EXP
+// The threshold at which tgamma(1-x) overflows float64 (~10^308 max).
+#define MAXGAML 171.624L
+#else
+// The threshold at which tgamma(1-x) overflows float128 (~10^4932 max).
+#define MAXGAML 1755.455L
+#endif
+
+/*static const long double LOGPI = 1.14472988584940017414L;*/
+
+/* Stirling's formula for the gamma function
+tgamma(x) = sqrt(2 pi) x^(x-.5) exp(-x) (1 + 1/x P(1/x))
+z(x) = x
+13 <= x <= 1024
+Relative error
+n=8, d=0
+Peak error =  9.44e-21
+Relative error spread =  8.8e-4
+*/
+
+static long double STIR[9] = {
+    7.147391378143610789273E-4L,  -2.363848809501759061727E-5L,
+    -5.950237554056330156018E-4L, 6.989332260623193171870E-5L,
+    7.840334842744753003862E-4L,  -2.294719747873185405699E-4L,
+    -2.681327161876304418288E-3L, 3.472222222230075327854E-3L,
+    8.333333333333331800504E-2L,
+};
+
+#define MAXSTIR 1024.0L
+static const long double SQTPI = 2.50662827463100050242E0L;
+
+/* 1/tgamma(x) = z P(z)
+ * z(x) = 1/x
+ * 0 < x < 0.03125
+ * Peak relative error 4.2e-23
+ */
+
+static long double S[9] = {
+    -1.193945051381510095614E-3L, 7.220599478036909672331E-3L,
+    -9.622023360406271645744E-3L, -4.219773360705915470089E-2L,
+    1.665386113720805206758E-1L,  -4.200263503403344054473E-2L,
+    -6.558780715202540684668E-1L, 5.772156649015328608253E-1L,
+    1.000000000000000000000E0L,
+};
+
+/* 1/tgamma(-x) = z P(z)
+ * z(x) = 1/x
+ * 0 < x < 0.03125
+ * Peak relative error 5.16e-23
+ * Relative error spread =  2.5e-24
+ */
+
+static long double SN[9] = {
+    1.133374167243894382010E-3L,  7.220837261893170325704E-3L,
+    9.621911155035976733706E-3L,  -4.219773343731191721664E-2L,
+    -1.665386113944413519335E-1L, -4.200263503402112910504E-2L,
+    6.558780715202536547116E-1L,  5.772156649015328608727E-1L,
+    -1.000000000000000000000E0L,
+};
+
+static const long double PIL = 3.1415926535897932384626L;
+
+static long double stirf(long double);
+
+long double __polevll(long double x, void *PP, int n)
+{
+    long double y;
+    long double *P;
+
+    P = (long double *)PP;
+    y = *P++;
+    do
+    {
+        y = y * x + *P++;
+    } while (--n);
+
+    return (y);
+}
+
+/* Gamma function computed by Stirling's formula.
+ */
+static long double stirf(long double x)
+{
+    long double y, w, v;
+
+    w = 1.0L / x;
+    /* For large x, use rational coefficients from the analytical expansion.  */
+    if (x > 1024.0L)
+        w = (((((6.97281375836585777429E-5L * w + 7.84039221720066627474E-4L)
+                    * w
+                - 2.29472093621399176955E-4L)
+                   * w
+               - 2.68132716049382716049E-3L)
+                  * w
+              + 3.47222222222222222222E-3L)
+                 * w
+             + 8.33333333333333333333E-2L)
+                * w
+            + 1.0L;
+    else
+        w = 1.0L + w * __polevll(w, STIR, 8);
+    y = expl(x);
+    if (x > MAXSTIR)
+    { /* Avoid overflow in pow() */
+        v = powl(x, 0.5L * x - 0.25L);
+        y = v * (v / y);
+    }
+    else
+    {
+        y = powl(x, x - 0.5L) / y;
+    }
+    y = SQTPI * y * w;
+    return (y);
+}
+
+long double olm_tgammal(long double x)
+{
+    long double p, q, z;
+    int i;
+
+    if (isnan(x)) return (NAN);
+    if (x == INFINITY) return (INFINITY);
+    if (x == -INFINITY) return (x - x);
+    if (x == 0.0L) return (1.0L / x);
+    q = fabsl(x);
+
+    if (q > 13.0L)
+    {
+        int sign = 1;
+        if (q > MAXGAML) goto goverf;
+        if (x < 0.0L)
+        {
+            p = floorl(q);
+            if (p == q) return (x - x) / (x - x);
+            i = p;
+            if ((i & 1) == 0) sign = -1;
+            z = q - p;
+            if (z > 0.5L)
+            {
+                p += 1.0L;
+                z = q - p;
+            }
+            z = q * sinl(PIL * z);
+            z = fabsl(z) * stirf(q);
+            if (z <= PIL / LDBL_MAX)
+            {
+            goverf:
+                return (sign * INFINITY);
+            }
+            z = PIL / z;
+        }
+        else
+        {
+            z = stirf(x);
+        }
+        return (sign * z);
+    }
+
+    z = 1.0L;
+    while (x >= 3.0L)
+    {
+        x -= 1.0L;
+        z *= x;
+    }
+
+    while (x < -0.03125L)
+    {
+        z /= x;
+        x += 1.0L;
+    }
+
+    if (x <= 0.03125L) goto smallarg;
+
+    while (x < 2.0L)
+    {
+        z /= x;
+        x += 1.0L;
+    }
+
+    if (x == 2.0L) return (z);
+
+    x -= 2.0L;
+    p = __polevll(x, P, 7);
+    q = __polevll(x, Q, 8);
+    z = z * p / q;
+    return z;
+
+smallarg:
+    if (x == 0.0L)
+        return (x - x) / (x - x);
+    else
+    {
+        if (x < 0.0L)
+        {
+            x = -x;
+            q = z / (x * __polevll(x, SN, 8));
+        }
+        else
+            q = z / (x * __polevll(x, S, 8));
+    }
+    return q;
+}
+
+}
+
+double reference_tgamma(double x)
+{
+    if (x < 0.0f)
+    {
+        float fx = x;
+        if (fx == std::floor(fx))
+        {
+            return cl_make_nan();
+        }
+
+        // The gamma function satisfies the reflection formula:
+        //   tgamma(x) = pi / (sin(pi*x) * tgamma(1-x))
+        // For large negative non-integer arguments, tgamma(1-x) should overflow
+        // to +inf, causing the reflection formula pi/(sin(pi*x)*tgamma(1-x)) to
+        // collapse to +/-0. However, reference olm_tgamma does not handle this
+        // case correctly, so it must be handled externally. The sign is
+        // determined analytically from the alternating sign rule: for x in
+        // (-(n+1), -n), sign(tgamma(x)) = (-1)^(n+1).
+
+        if (x < -MAXGAML)
+        {
+            long n = (long)std::floor(-fx);
+            bool negative = (n % 2 == 0);
+            return negative ? -0.0 : 0.0;
+        }
+    }
+    return olm_tgammal(x);
 }
 
 #pragma mark -
@@ -2321,7 +2602,7 @@ static inline double_double accum_d(double_double a, double b)
 
 static inline double_double add_dd(double_double a, double_double b)
 {
-    double_double r = { -0.0 - 0.0 };
+    double_double r = { -0.0, -0.0 };
 
     if (isinf(a.hi) || isinf(b.hi) || isnan(a.hi) || isnan(b.hi) || 0.0 == a.hi
         || 0.0 == b.hi)
@@ -2724,6 +3005,34 @@ static double round_to_nearest_even_double(cl_ulong hi, cl_ulong lo,
     return u.d;
 }
 
+static double round_toward_zero_double(cl_ulong hi, cl_ulong lo, int exponent)
+{
+    union {
+        cl_ulong u;
+        cl_double d;
+    } u;
+
+    // edges
+    if (exponent > 1023) return CL_DBL_MAX;
+    if (exponent <= -1074) return 0.0;
+
+    // Figure out which bits go where
+    int shift = 11;
+    if (exponent < -1022)
+    {
+        shift -= 1022 + exponent; // subnormal: shift is not 52
+        exponent = -1023; //              set exponent to 0
+    }
+    else
+        hi &= 0x7fffffffffffffffULL; // normal: leading bit is implicit. Remove
+                                     // it.
+
+    // Assemble the double (round toward zero)
+    u.u = (hi >> shift) | ((cl_ulong)(exponent + 1023) << 52);
+
+    return u.d;
+}
+
 // Shift right.  Bits lost on the right will be OR'd together and OR'd with the
 // LSB
 static inline void shift_right_sticky_128(cl_ulong *hi, cl_ulong *lo, int shift)
@@ -2743,7 +3052,7 @@ static inline void shift_right_sticky_128(cl_ulong *hi, cl_ulong *lo, int shift)
             sticky |= (0 != l);
             l = 0;
         }
-        else
+        else if (shift > 0)
         {
             sticky |= (0 != (l << (64 - shift)));
             l >>= shift;
@@ -2956,7 +3265,14 @@ long double reference_fmal(long double x, long double y, long double z)
     }
 
     // round
-    ua.d = round_to_nearest_even_double(hi, lo, exponent);
+    if (gIsInRTZMode)
+    {
+        ua.d = round_toward_zero_double(hi, lo, exponent);
+    }
+    else
+    {
+        ua.d = round_to_nearest_even_double(hi, lo, exponent);
+    }
 
     // Set the sign
     ua.u |= sign;
@@ -3043,9 +3359,9 @@ long double reference_tanpil(long double x)
     long double z = reference_fabsl(x);
 
     // if big and even  -- caution: only works if x only has single precision
-    if (z >= HEX_LDBL(+, 1, 0, +, 53))
+    if (!(z < HEX_LDBL(+, 1, 0, +, 53)))
     {
-        if (z == INFINITY) return x - x; // nan
+        if (!isfinite(z)) return x - x; // nan
 
         return reference_copysignl(
             0.0L, x); // tanpi ( n ) is copysign( 0.0, n)  for even integers n.
@@ -3165,6 +3481,8 @@ long double reference_subtractl(long double x, long double y)
     return (long double)a;
 }
 
+long double reference_negationl(long double v) { return -v; }
+
 long double reference_multiplyl(long double x, long double y)
 {
     volatile double a = (double)x;
@@ -3195,7 +3513,7 @@ int reference_isgreaterequall(long double x, long double y) { return x >= y; }
 int reference_isinfl(long double x) { return 0 != isinf(x); }
 int reference_islessl(long double x, long double y) { return x < y; }
 int reference_islessequall(long double x, long double y) { return x <= y; }
-#if defined(__INTEL_COMPILER)
+#if defined(__INTEL_COMPILER) || defined(__INTEL_LLVM_COMPILER)
 int reference_islessgreaterl(long double x, long double y)
 {
     return 0 != islessgreaterl(x, y);
@@ -3217,7 +3535,7 @@ int reference_isunorderedl(long double x, long double y)
 {
     return isnan(x) || isnan(y);
 }
-#if defined(__INTEL_COMPILER)
+#if defined(__INTEL_COMPILER) || defined(__INTEL_LLVM_COMPILER)
 int reference_signbitl(long double x) { return 0 != signbitl(x); }
 #else
 int reference_signbitl(long double x) { return 0 != signbit(x); }
@@ -3309,7 +3627,7 @@ long double reference_cbrtl(long double x)
 
 long double reference_rintl(long double x)
 {
-#if defined(__PPC__)
+#if defined(__PPC__) || defined(__riscv)
     // On PPC, long doubles are maintained as 2 doubles. Therefore, the combined
     // mantissa can represent more than LDBL_MANT_DIG binary digits.
     x = rintl(x);
@@ -3581,7 +3899,8 @@ long double reference_exp2l(long double z)
 
 long double reference_expm1l(long double x)
 {
-#if defined(_MSC_VER) && !defined(__INTEL_COMPILER)
+#if defined(_MSC_VER) && !defined(__INTEL_COMPILER)                            \
+    && !defined(__INTEL_LLVM_COMPILER)
     // unimplemented
     return x;
 #else
@@ -3602,6 +3921,7 @@ long double reference_expm1l(long double x)
 long double reference_fmaxl(long double x, long double y)
 {
     if (isnan(y)) return x;
+    if (isnan(x)) return y;
 
     return x >= y ? x : y;
 }
@@ -3609,6 +3929,7 @@ long double reference_fmaxl(long double x, long double y)
 long double reference_fminl(long double x, long double y)
 {
     if (isnan(y)) return x;
+    if (isnan(x)) return y;
 
     return x <= y ? x : y;
 }
@@ -3666,7 +3987,8 @@ long double reference_log2l(long double x)
 
 long double reference_log1pl(long double x)
 {
-#if defined(_MSC_VER) && !defined(__INTEL_COMPILER)
+#if defined(_MSC_VER) && !defined(__INTEL_COMPILER)                            \
+    && !defined(__INTEL_LLVM_COMPILER)
     // unimplemented
     return x;
 #elif defined(__PPC__)
@@ -3736,9 +4058,6 @@ long double reference_nanl(cl_ulong x)
     u.u = x | 0x7ff8000000000000ULL;
     return (long double)u.f;
 }
-
-
-long double reference_reciprocall(long double x) { return 1.0L / x; }
 
 long double reference_remainderl(long double x, long double y)
 {
@@ -4549,8 +4868,8 @@ long double reference_powl(long double x, long double y)
     if (x != x || y != y) return x + y;
 
     // do the work required to sort out edge cases
-    double fabsy = reference_fabs(y);
-    double fabsx = reference_fabs(x);
+    double fabsy = (double)reference_fabsl(y);
+    double fabsx = (double)reference_fabsl(x);
     double iy = reference_rint(
         fabsy); // we do round to nearest here so that |fy| <= 0.5
     if (iy > fabsy) // convert nearbyint to floor
@@ -4637,13 +4956,13 @@ long double reference_powl(long double x, long double y)
 
     // compute product of y*log2(x)
     // scale to avoid overflow in double-double multiplication
-    if (reference_fabs(y) > HEX_DBL(+, 1, 0, +, 970))
+    if (fabsy > HEX_DBL(+, 1, 0, +, 970))
     {
         y_hi = reference_ldexp(y_hi, -53);
         y_lo = reference_ldexp(y_lo, -53);
     }
     MulDD(&ylog2x_hi, &ylog2x_lo, log2x_hi, log2x_lo, y_hi, y_lo);
-    if (fabs(y) > HEX_DBL(+, 1, 0, +, 970))
+    if (fabsy > HEX_DBL(+, 1, 0, +, 970))
     {
         ylog2x_hi = reference_ldexp(ylog2x_hi, 53);
         ylog2x_lo = reference_ldexp(ylog2x_lo, 53);
@@ -4698,6 +5017,49 @@ double reference_nextafter(double xx, double yy)
     return a.f;
 }
 
+cl_half reference_nanh(cl_ushort x)
+{
+    cl_ushort u;
+    cl_half h;
+    u = x | 0x7e00U;
+    memcpy(&h, &u, sizeof(cl_half));
+    return h;
+}
+
+float reference_nextafterh(float xx, float yy, bool allow_denorms)
+{
+    cl_half tmp_a = cl_half_from_float(xx, CL_HALF_RTE);
+    cl_half tmp_b = cl_half_from_float(yy, CL_HALF_RTE);
+    float x = cl_half_to_float(tmp_a);
+    float y = cl_half_to_float(tmp_b);
+
+    // take care of nans
+    if (x != x) return x;
+
+    if (y != y) return y;
+
+    if (x == y) return y;
+
+    short a_h = cl_half_from_float(x, CL_HALF_RTE);
+    short b_h = cl_half_from_float(y, CL_HALF_RTE);
+    short oa_h = a_h;
+
+    if (a_h & 0x8000) a_h = 0x8000 - a_h;
+    if (b_h & 0x8000) b_h = 0x8000 - b_h;
+
+    a_h += (a_h < b_h) ? 1 : -1;
+    a_h = (a_h < 0) ? (cl_short)0x8000 - a_h : a_h;
+
+    if (!allow_denorms && IsHalfSubnormal(a_h))
+    {
+        if (cl_half_to_float(0x7fff & oa_h) < cl_half_to_float(0x7fff & a_h))
+            a_h = (a_h & 0x8000) ? 0x8400 : 0x0400;
+        else
+            a_h = 0;
+    }
+
+    return cl_half_to_float(a_h);
+}
 
 long double reference_nextafterl(long double xx, long double yy)
 {
@@ -4921,7 +5283,7 @@ long double reference_remquol(long double xd, long double yd, int *n)
     return xr;
 }
 
-static double reference_scalbn(double x, int n)
+[[maybe_unused]] static double reference_scalbn(double x, int n)
 {
     if (reference_isinf(x) || reference_isnan(x) || x == 0.0) return x;
 
@@ -4938,8 +5300,9 @@ static double reference_scalbn(double x, int n)
         u.d -= 1.0;
         e = (int)((u.l & 0x7ff0000000000000LL) >> 52) - 1022;
     }
+    if (n >= 2098) return reference_copysign(INFINITY, x);
     e += n;
-    if (e >= 2047 || n >= 2098) return reference_copysign(INFINITY, x);
+    if (e >= 2047) return reference_copysign(INFINITY, x);
     if (e < -51 || n < -2097) return reference_copysign(0.0, x);
     if (e <= 0)
     {
@@ -5289,7 +5652,7 @@ double reference_pow(double x, double y)
     __log2_ep(&hi, &lo, fabsx);
     double prod = y * hi;
     double result = reference_exp2(prod);
-    return isOddInt ? reference_copysignd(result, x) : result;
+    return isOddInt ? reference_copysign(result, x) : result;
 }
 
 double reference_sqrt(double x) { return sqrt(x); }
@@ -5357,10 +5720,10 @@ long double reference_acosl(long double x)
         0x3243F6A8885A308DULL, 0x313198A2E0370734ULL
     }; // first 126 bits of pi
        // http://www.super-computing.org/pi-hexa_current.html
-    long double head, tail, temp;
+    long double head, tail;
 #if __LDBL_MANT_DIG__ >= 64
     // long double has 64-bits of precision or greater
-    temp = (long double)pi_bits[0] * 0x1.0p64L;
+    long double temp = (long double)pi_bits[0] * 0x1.0p64L;
     head = temp + (long double)pi_bits[1];
     temp -= head; // rounding err rounding pi_bits[1] into head
     tail = (long double)pi_bits[1] + temp;
@@ -5719,4 +6082,37 @@ int reference_notl(long double x)
 {
     int r = !x;
     return r;
+}
+
+long double reference_erfcl(long double x) { return erfc(x); }
+long double reference_erfl(long double x) { return erf(x); }
+
+double reference_erfc(double x) { return erfc(x); }
+double reference_erf(double x) { return erf(x); }
+long double reference_tgammal(long double x)
+{
+    if (x < 0.0)
+    {
+        if (x == std::floor(x))
+        {
+            return cl_make_nan();
+        }
+
+        // The gamma function satisfies the reflection formula:
+        //   tgamma(x) = pi / (sin(pi*x) * tgamma(1-x))
+        // For large negative non-integer arguments, tgamma(1-x) should overflow
+        // to +inf, causing the reflection formula pi/(sin(pi*x)*tgamma(1-x)) to
+        // collapse to +/-0. However, reference olm_tgamma does not handle this
+        // case correctly, so it must be handled externally. The sign is
+        // determined analytically from the alternating sign rule: for x in
+        // (-(n+1), -n), sign(tgamma(x)) = (-1)^(n+1).
+
+        if (x < -MAXGAML)
+        {
+            long n = (long)std::floor(-x);
+            bool negative = (n % 2 == 0);
+            return negative ? -0.0L : 0.0L;
+        }
+    }
+    return olm_tgammal(x);
 }

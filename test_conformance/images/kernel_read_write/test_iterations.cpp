@@ -17,14 +17,13 @@
 #include <float.h>
 
 #include <algorithm>
+#include <cinttypes>
 
 #if defined( __APPLE__ )
     #include <signal.h>
     #include <sys/signal.h>
     #include <setjmp.h>
 #endif
-
-extern bool gTestImage2DFromBuffer;
 
 // Utility function to clamp down image sizes for certain tests to avoid
 // using too much memory.
@@ -39,24 +38,28 @@ static size_t reduceImageSizeRange(size_t maxDimSize) {
 }
 
 const char *read2DKernelSourcePattern =
-"__kernel void sample_kernel( read_only %s input,%s __global float *xOffsets, __global float *yOffsets, __global %s%s *results %s)\n"
-"{\n"
-"%s"
-"   int tidX = get_global_id(0), tidY = get_global_id(1);\n"
-"%s"
-"%s"
-"   results[offset] = read_image%s( input, imageSampler, coords %s);\n"
-"}";
+    "%s\n"
+    "__kernel void sample_kernel( read_only %s input,%s __global float "
+    "*xOffsets, __global float *yOffsets, __global %s%s *results %s)\n"
+    "{\n"
+    "%s"
+    "   int tidX = get_global_id(0), tidY = get_global_id(1);\n"
+    "%s"
+    "%s"
+    "   results[offset] = read_image%s( input, imageSampler, coords %s);\n"
+    "}";
 
 const char *read_write2DKernelSourcePattern =
-"__kernel void sample_kernel( read_write %s input,%s __global float *xOffsets, __global float *yOffsets, __global %s%s *results %s)\n"
-"{\n"
-"%s"
-"   int tidX = get_global_id(0), tidY = get_global_id(1);\n"
-"%s"
-"%s"
-"   results[offset] = read_image%s( input, coords %s);\n"
-"}";
+    "%s\n"
+    "__kernel void sample_kernel( read_write %s input,%s __global float "
+    "*xOffsets, __global float *yOffsets, __global %s%s *results %s)\n"
+    "{\n"
+    "%s"
+    "   int tidX = get_global_id(0), tidY = get_global_id(1);\n"
+    "%s"
+    "%s"
+    "   results[offset] = read_image%s( input, coords %s);\n"
+    "}";
 
 const char *intCoordKernelSource =
 "   int2 coords = (int2)( xOffsets[offset], yOffsets[offset]);\n";
@@ -74,9 +77,14 @@ static const char *lodOffsetSource =
 static const char *offsetSource =
 "   int offset = tidY*get_image_width(input) + tidX;\n";
 
-template <class T> int determine_validation_error( void *imagePtr, image_descriptor *imageInfo, image_sampler_data *imageSampler,
-                                                T *resultPtr, T * expected, float error,
-                                float x, float y, float xAddressOffset, float yAddressOffset, size_t j, int &numTries, int &numClamped, bool printAsFloat, int lod = 0 )
+template <class T>
+int determine_validation_error(void *imagePtr, image_descriptor *imageInfo,
+                               image_sampler_data *imageSampler, T *resultPtr,
+                               T *expected, float error, float x, float y,
+                               float xAddressOffset, float yAddressOffset,
+                               size_t j, int &numTries, int &numClamped,
+                               bool printAsFloat, int lod,
+                               const image_test_context_t &ctx)
 {
     int actualX, actualY;
     int found = debug_find_pixel_in_image( imagePtr, imageInfo, resultPtr, &actualX, &actualY, NULL, lod );
@@ -92,7 +100,9 @@ template <class T> int determine_validation_error( void *imagePtr, image_descrip
         {
             if( (--numClamped) == 0 )
             {
-                log_error( "ERROR: TEST FAILED: Read is erroneously clamping coordinates for image size %ld x %ld!\n", imageInfo->width, imageInfo->height );
+                log_error("ERROR: TEST FAILED: Read is erroneously clamping "
+                          "coordinates for image size %zu x %zu!\n",
+                          imageInfo->width, imageInfo->height);
                 if (imageInfo->format->image_channel_order == CL_DEPTH)
                 {
                     if( printAsFloat )
@@ -134,7 +144,9 @@ template <class T> int determine_validation_error( void *imagePtr, image_descrip
         {
             if( (--numClamped) == 0 )
             {
-                log_error( "ERROR: TEST FAILED: Clamping is erroneously returning border color for image size %ld x %ld!\n", imageInfo->width, imageInfo->height );
+                log_error("ERROR: TEST FAILED: Clamping is erroneously "
+                          "returning border color for image size %zu x %zu!\n",
+                          imageInfo->width, imageInfo->height);
                 if (imageInfo->format->image_channel_order == CL_DEPTH)
                 {
                     if( printAsFloat )
@@ -198,12 +210,13 @@ template <class T> int determine_validation_error( void *imagePtr, image_descrip
                                     (int)resultPtr[ 0 ], (int)resultPtr[ 1 ], (int)resultPtr[ 2 ], (int)resultPtr[ 3 ] );
             }
         }
-        log_error( "img size %ld,%ld (pitch %ld)", imageInfo->width, imageInfo->height, imageInfo->rowPitch );
+        log_error("img size %zu,%zu (pitch %zu)", imageInfo->width,
+                  imageInfo->height, imageInfo->rowPitch);
         if( clamped )
         {
             log_error( " which would clamp to %d,%d\n", clampedX, clampedY );
         }
-        if( printAsFloat && gExtraValidateInfo)
+        if (printAsFloat && ctx.extraValidateInfo)
         {
             log_error( "Nearby values:\n" );
             log_error( "\t%d\t%d\t%d\t%d\n", clampedX - 2, clampedX - 1, clampedX, clampedX + 1 );
@@ -277,70 +290,21 @@ template <class T> int determine_validation_error( void *imagePtr, image_descrip
     return 0;
 }
 
-static void InitFloatCoords( image_descriptor *imageInfo, image_sampler_data *imageSampler, float *xOffsets, float *yOffsets, float xfract, float yfract, int normalized_coords, MTdata d )
-{
-    size_t i = 0;
-    if( gDisableOffsets )
-    {
-        for( size_t y = 0; y < imageInfo->height; y++ )
-        {
-            for( size_t x = 0; x < imageInfo->width; x++, i++ )
-            {
-                xOffsets[ i ] = (float) (xfract + (double) x);
-                yOffsets[ i ] = (float) (yfract + (double) y);
-            }
-        }
-    }
-    else
-    {
-        for( size_t y = 0; y < imageInfo->height; y++ )
-        {
-            for( size_t x = 0; x < imageInfo->width; x++, i++ )
-            {
-                xOffsets[ i ] = (float) (xfract + (double) ((int) x + random_in_range( -10, 10, d )));
-                yOffsets[ i ] = (float) (yfract + (double) ((int) y + random_in_range( -10, 10, d )));
-            }
-        }
-    }
-
-    if( imageSampler->addressing_mode == CL_ADDRESS_NONE )
-    {
-        i = 0;
-        for( size_t y = 0; y < imageInfo->height; y++ )
-        {
-            for( size_t x = 0; x < imageInfo->width; x++, i++ )
-            {
-                xOffsets[ i ] = (float) CLAMP( (double) xOffsets[ i ], 0.0, (double) imageInfo->width - 1.0);
-                yOffsets[ i ] = (float) CLAMP( (double) yOffsets[ i ], 0.0, (double)imageInfo->height - 1.0);
-            }
-        }
-    }
-
-    if( normalized_coords )
-    {
-        i = 0;
-        for( size_t y = 0; y < imageInfo->height; y++ )
-        {
-            for( size_t x = 0; x < imageInfo->width; x++, i++ )
-            {
-                xOffsets[ i ] = (float) ((double) xOffsets[ i ] / (double) imageInfo->width);
-                yOffsets[ i ] = (float) ((double) yOffsets[ i ] / (double) imageInfo->height);
-            }
-        }
-    }
-}
-
-static void InitFloatCoords( image_descriptor *imageInfo, image_sampler_data *imageSampler, float *xOffsets, float *yOffsets, float xfract, float yfract, int normalized_coords, MTdata d, size_t lod)
+static void InitFloatCoords(image_descriptor *imageInfo,
+                            image_sampler_data *imageSampler, float *xOffsets,
+                            float *yOffsets, float xfract, float yfract,
+                            int normalized_coords, MTdata d, size_t lod,
+                            const image_test_context_t &ctx)
 {
     size_t i = 0;
     size_t width_lod = imageInfo->width, height_lod = imageInfo->height;
 
-    if( gTestMipmaps )
+    if (ctx.testMipmaps)
     {
         width_lod = (imageInfo->width >> lod)?(imageInfo->width >> lod):1;
         height_lod = (imageInfo->height >> lod)?(imageInfo->height >> lod):1;
     }
-    if( gDisableOffsets )
+    if (ctx.disableOffsets)
     {
         for( size_t y = 0; y < height_lod; y++ )
         {
@@ -390,8 +354,12 @@ static void InitFloatCoords( image_descriptor *imageInfo, image_sampler_data *im
     }
 }
 
-int validate_image_2D_depth_results(void *imageValues, void *resultValues, double formatAbsoluteError, float *xOffsetValues, float *yOffsetValues,
-                                                        ExplicitType outputType, int &numTries, int &numClamped, image_sampler_data *imageSampler, image_descriptor *imageInfo, size_t lod, char *imagePtr)
+int validate_image_2D_depth_results(
+    void *imageValues, void *resultValues, double formatAbsoluteError,
+    float *xOffsetValues, float *yOffsetValues, ExplicitType outputType,
+    int &numTries, int &numClamped, image_sampler_data *imageSampler,
+    image_descriptor *imageInfo, size_t lod, char *imagePtr,
+    const image_test_context_t &ctx)
 {
     // Validate results element by element
     size_t width_lod = (imageInfo->width >> lod ) ?(imageInfo->width >> lod ) : 1;
@@ -415,12 +383,15 @@ int validate_image_2D_depth_results(void *imageValues, void *resultValues, doubl
                 int checkOnlyOnePixel = 0;
                 int found_pixel = 0;
                 float offset = NORM_OFFSET;
-                if (!imageSampler->normalized_coords ||  imageSampler->filter_mode != CL_FILTER_NEAREST || NORM_OFFSET == 0
+                if (!imageSampler->normalized_coords
+                    || imageSampler->filter_mode != CL_FILTER_NEAREST
+                    || NORM_OFFSET == 0
 #if defined( __APPLE__ )
-                    // Apple requires its CPU implementation to do correctly rounded address arithmetic in all modes
-                    || gDeviceType != CL_DEVICE_TYPE_GPU
+                    // Apple requires its CPU implementation to do correctly
+                    // rounded address arithmetic in all modes
+                    || !(gDeviceType & CL_DEVICE_TYPE_GPU)
 #endif
-                    )
+                )
                     offset = 0.0f;          // Loop only once
 
                 for (float norm_offset_x = -offset; norm_offset_x <= offset && !found_pixel; norm_offset_x += NORM_OFFSET) {
@@ -474,7 +445,12 @@ int validate_image_2D_depth_results(void *imageValues, void *resultValues, doubl
 
                             // If we are not on a GPU, or we are not normalized, then only test with offsets (0.0, 0.0)
                             // E.g., test one pixel.
-                            if (!imageSampler->normalized_coords || gDeviceType != CL_DEVICE_TYPE_GPU || NORM_OFFSET == 0) {
+                            if (!imageSampler->normalized_coords
+#if defined(__APPLE__)
+                                || !(gDeviceType & CL_DEVICE_TYPE_GPU)
+#endif
+                                || NORM_OFFSET == 0)
+                            {
                                 norm_offset_x = 0.0f;
                                 norm_offset_y = 0.0f;
                                 checkOnlyOnePixel = 1;
@@ -510,8 +486,13 @@ int validate_image_2D_depth_results(void *imageValues, void *resultValues, doubl
                                 log_error("FAILED norm_offsets: %g , %g:\n", norm_offset_x, norm_offset_y);
 
                                 float tempOut[4];
-                                shouldReturn |= determine_validation_error<float>( imagePtr, imageInfo, imageSampler, resultPtr,
-                                                                                  expected, error, xOffsetValues[ j ], yOffsetValues[ j ], norm_offset_x, norm_offset_y, j, numTries, numClamped, true, lod );
+                                shouldReturn |=
+                                    determine_validation_error<float>(
+                                        imagePtr, imageInfo, imageSampler,
+                                        resultPtr, expected, error,
+                                        xOffsetValues[j], yOffsetValues[j],
+                                        norm_offset_x, norm_offset_y, j,
+                                        numTries, numClamped, true, lod, ctx);
 
                                 log_error( "Step by step:\n" );
                                 FloatPixel temp;
@@ -544,8 +525,13 @@ int validate_image_2D_depth_results(void *imageValues, void *resultValues, doubl
     return 0;
 }
 
-int validate_image_2D_results(void *imageValues, void *resultValues, double formatAbsoluteError, float *xOffsetValues, float *yOffsetValues,
-                                                        ExplicitType outputType, int &numTries, int &numClamped, image_sampler_data *imageSampler, image_descriptor *imageInfo, size_t lod, char *imagePtr)
+int validate_image_2D_results(void *imageValues, void *resultValues,
+                              double formatAbsoluteError, float *xOffsetValues,
+                              float *yOffsetValues, ExplicitType outputType,
+                              int &numTries, int &numClamped,
+                              image_sampler_data *imageSampler,
+                              image_descriptor *imageInfo, size_t lod,
+                              char *imagePtr, const image_test_context_t &ctx)
 {
     // Validate results element by element
     size_t width_lod = (imageInfo->width >> lod ) ?(imageInfo->width >> lod ) : 1;
@@ -569,12 +555,15 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
                 int checkOnlyOnePixel = 0;
                 int found_pixel = 0;
                 float offset = NORM_OFFSET;
-                if (!imageSampler->normalized_coords ||  imageSampler->filter_mode != CL_FILTER_NEAREST || NORM_OFFSET == 0
+                if (!imageSampler->normalized_coords
+                    || imageSampler->filter_mode != CL_FILTER_NEAREST
+                    || NORM_OFFSET == 0
 #if defined( __APPLE__ )
-                    // Apple requires its CPU implementation to do correctly rounded address arithmetic in all modes
-                    || gDeviceType != CL_DEVICE_TYPE_GPU
+                    // Apple requires its CPU implementation to do correctly
+                    // rounded address arithmetic in all modes
+                    || !(gDeviceType & CL_DEVICE_TYPE_GPU)
 #endif
-                    )
+                )
                     offset = 0.0f;          // Loop only once
 
                 for (float norm_offset_x = -offset; norm_offset_x <= offset && !found_pixel; norm_offset_x += NORM_OFFSET) {
@@ -584,7 +573,7 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
                         // Try sampling the pixel, without flushing denormals.
                         int containsDenormals = 0;
                         FloatPixel maxPixel;
-                        if ( gTestMipmaps )
+                        if (ctx.testMipmaps)
                             maxPixel = sample_image_pixel_float_offset( imagePtr, imageInfo,
                                                                         xOffsetValues[ j ], yOffsetValues[ j ], 0.0f, norm_offset_x, norm_offset_y, 0.0f,
                                                                         imageSampler, expected, 0, &containsDenormals, lod );
@@ -625,7 +614,7 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
                                 maxErr3 += 4 * FLT_MIN;
                                 maxErr4 += 4 * FLT_MIN;
 
-                                if(gTestMipmaps)
+                                if (ctx.testMipmaps)
                                     maxPixel = sample_image_pixel_float_offset( imagePtr, imageInfo,
                                                                                  xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                                                  imageSampler, expected, 0, NULL,lod );
@@ -658,7 +647,12 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
 
                             // If we are not on a GPU, or we are not normalized, then only test with offsets (0.0, 0.0)
                             // E.g., test one pixel.
-                            if (!imageSampler->normalized_coords || gDeviceType != CL_DEVICE_TYPE_GPU || NORM_OFFSET == 0) {
+                            if (!imageSampler->normalized_coords
+#if defined(__APPLE__)
+                                || !(gDeviceType & CL_DEVICE_TYPE_GPU)
+#endif
+                                || NORM_OFFSET == 0)
+                            {
                                 norm_offset_x = 0.0f;
                                 norm_offset_y = 0.0f;
                                 checkOnlyOnePixel = 1;
@@ -666,7 +660,7 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
 
                             int containsDenormals = 0;
                             FloatPixel maxPixel;
-                            if(gTestMipmaps)
+                            if (ctx.testMipmaps)
                                 maxPixel = sample_image_pixel_float_offset( imagePtr, imageInfo,
                                                                                         xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                                                         imageSampler, expected, 0, &containsDenormals, lod );
@@ -700,7 +694,7 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
                                     maxErr3 += 4 * FLT_MIN;
                                     maxErr4 += 4 * FLT_MIN;
 
-                                    if(gTestMipmaps)
+                                    if (ctx.testMipmaps)
                                         maxPixel = sample_image_pixel_float_offset( imagePtr, imageInfo,
                                                                                      xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                                                      imageSampler, expected, 0, NULL, lod );
@@ -721,19 +715,34 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
                                 log_error("FAILED norm_offsets: %g , %g:\n", norm_offset_x, norm_offset_y);
 
                                 float tempOut[4];
-                                shouldReturn |= determine_validation_error<float>( imagePtr, imageInfo, imageSampler, resultPtr,
-                                                                                  expected, error, xOffsetValues[ j ], yOffsetValues[ j ], norm_offset_x, norm_offset_y, j, numTries, numClamped, true, lod );
+                                shouldReturn |=
+                                    determine_validation_error<float>(
+                                        imagePtr, imageInfo, imageSampler,
+                                        resultPtr, expected, error,
+                                        xOffsetValues[j], yOffsetValues[j],
+                                        norm_offset_x, norm_offset_y, j,
+                                        numTries, numClamped, true, lod, ctx);
 
                                 log_error( "Step by step:\n" );
                                 FloatPixel temp;
-                                if( gTestMipmaps )
-                                     temp = sample_image_pixel_float_offset( imagePtr, imageInfo,
-                                                                                    xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
-                                                                                    imageSampler, tempOut, 1 /* verbose */, &containsDenormals /*dont flush while error reporting*/, lod );
-                                 else
-                                     temp = sample_image_pixel_float_offset( imageValues, imageInfo,
-                                                                                    xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
-                                                                                    imageSampler, tempOut, 1 /* verbose */, &containsDenormals /*dont flush while error reporting*/ );
+                                if (ctx.testMipmaps)
+                                    temp = sample_image_pixel_float_offset(
+                                        imagePtr, imageInfo, xOffsetValues[j],
+                                        yOffsetValues[j], 0.f, norm_offset_x,
+                                        norm_offset_y, 0.0f, imageSampler,
+                                        tempOut, 1 /* verbose */,
+                                        &containsDenormals /*dont flush while
+                                                              error reporting*/
+                                        ,
+                                        lod);
+                                else
+                                    temp =
+                                        sample_image_pixel_float_offset(
+                                            imageValues, imageInfo,
+                                            xOffsetValues[j], yOffsetValues[j],
+                                            0.f, norm_offset_x, norm_offset_y,
+                                            0.0f, imageSampler, tempOut,
+                                            1 /* verbose */, &containsDenormals /*dont flush while error reporting*/);
                                 log_error( "\tulps: %2.2f, %2.2f, %2.2f, %2.2f  (max allowed: %2.2f)\n\n",
                                                     Ulp_Error( resultPtr[0], expected[0] ),
                                                     Ulp_Error( resultPtr[1], expected[1] ),
@@ -778,13 +787,18 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
 
                         // If we are not on a GPU, or we are not normalized, then only test with offsets (0.0, 0.0)
                         // E.g., test one pixel.
-                        if (!imageSampler->normalized_coords || gDeviceType != CL_DEVICE_TYPE_GPU || NORM_OFFSET == 0) {
+                        if (!imageSampler->normalized_coords
+#if defined(__APPLE__)
+                            || !(gDeviceType & CL_DEVICE_TYPE_GPU)
+#endif
+                            || NORM_OFFSET == 0)
+                        {
                             norm_offset_x = 0.0f;
                             norm_offset_y = 0.0f;
                             checkOnlyOnePixel = 1;
                         }
 
-                        if ( gTestMipmaps )
+                        if (ctx.testMipmaps)
                             sample_image_pixel_offset<unsigned int>( (char*)imagePtr, imageInfo,
                                                                                              xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                                                              imageSampler, expected, lod );
@@ -813,13 +827,18 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
 
                             // If we are not on a GPU, or we are not normalized, then only test with offsets (0.0, 0.0)
                             // E.g., test one pixel.
-                            if (!imageSampler->normalized_coords || gDeviceType != CL_DEVICE_TYPE_GPU || NORM_OFFSET == 0) {
+                            if (!imageSampler->normalized_coords
+#if defined(__APPLE__)
+                                || !(gDeviceType & CL_DEVICE_TYPE_GPU)
+#endif
+                                || NORM_OFFSET == 0)
+                            {
                                 norm_offset_x = 0.0f;
                                 norm_offset_y = 0.0f;
                                 checkOnlyOnePixel = 1;
                             }
 
-                            if( gTestMipmaps )
+                            if (ctx.testMipmaps)
                                 sample_image_pixel_offset<unsigned int>( imagePtr , imageInfo,
                                                                                                  xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                                                                  imageSampler, expected, lod );
@@ -836,8 +855,13 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
                             {
                                 log_error("FAILED norm_offsets: %g , %g:\n", norm_offset_x, norm_offset_y);
 
-                                shouldReturn |= determine_validation_error<unsigned int>( imagePtr, imageInfo, imageSampler, resultPtr,
-                                                                                         expected, error, xOffsetValues[j], yOffsetValues[j], norm_offset_x, norm_offset_y, j, numTries, numClamped, false, lod );
+                                shouldReturn |=
+                                    determine_validation_error<unsigned int>(
+                                        imagePtr, imageInfo, imageSampler,
+                                        resultPtr, expected, error,
+                                        xOffsetValues[j], yOffsetValues[j],
+                                        norm_offset_x, norm_offset_y, j,
+                                        numTries, numClamped, false, lod, ctx);
                             } else {
                                 log_error("Test error: we should have detected this passing above.\n");
                             }
@@ -874,13 +898,18 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
 
                         // If we are not on a GPU, or we are not normalized, then only test with offsets (0.0, 0.0)
                         // E.g., test one pixel.
-                        if (!imageSampler->normalized_coords || gDeviceType != CL_DEVICE_TYPE_GPU || NORM_OFFSET == 0) {
+                        if (!imageSampler->normalized_coords
+#if defined(__APPLE__)
+                            || !(gDeviceType & CL_DEVICE_TYPE_GPU)
+#endif
+                            || NORM_OFFSET == 0)
+                        {
                             norm_offset_x = 0.0f;
                             norm_offset_y = 0.0f;
                             checkOnlyOnePixel = 1;
                         }
 
-                        if ( gTestMipmaps )
+                        if (ctx.testMipmaps)
                             sample_image_pixel_offset<int>( imagePtr, imageInfo,
                                                             xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                             imageSampler, expected , lod);
@@ -909,13 +938,18 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
 
                             // If we are not on a GPU, or we are not normalized, then only test with offsets (0.0, 0.0)
                             // E.g., test one pixel.
-                            if (!imageSampler->normalized_coords || gDeviceType != CL_DEVICE_TYPE_GPU || NORM_OFFSET == 0) {
+                            if (!imageSampler->normalized_coords
+#if defined(__APPLE__)
+                                || !(gDeviceType & CL_DEVICE_TYPE_GPU)
+#endif
+                                || NORM_OFFSET == 0)
+                            {
                                 norm_offset_x = 0.0f;
                                 norm_offset_y = 0.0f;
                                 checkOnlyOnePixel = 1;
                             }
 
-                            if ( gTestMipmaps )
+                            if (ctx.testMipmaps)
                                 sample_image_pixel_offset<int>( imageValues, imageInfo,
                                                                 xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                                 imageSampler, expected, lod );
@@ -932,8 +966,12 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
                             {
                                 log_error("FAILED norm_offsets: %g , %g:\n", norm_offset_x, norm_offset_y);
 
-                                shouldReturn |= determine_validation_error<int>( imagePtr, imageInfo, imageSampler, resultPtr,
-                                                                                expected, error, xOffsetValues[j], yOffsetValues[j], norm_offset_x, norm_offset_y, j, numTries, numClamped, false, lod );
+                                shouldReturn |= determine_validation_error<int>(
+                                    imagePtr, imageInfo, imageSampler,
+                                    resultPtr, expected, error,
+                                    xOffsetValues[j], yOffsetValues[j],
+                                    norm_offset_x, norm_offset_y, j, numTries,
+                                    numClamped, false, lod, ctx);
                             } else {
                                 log_error("Test error: we should have detected this passing above.\n");
                             }
@@ -950,8 +988,12 @@ int validate_image_2D_results(void *imageValues, void *resultValues, double form
     return 0;
 }
 
-int validate_image_2D_sRGB_results(void *imageValues, void *resultValues, double formatAbsoluteError, float *xOffsetValues, float *yOffsetValues,
-                                                        ExplicitType outputType, int &numTries, int &numClamped, image_sampler_data *imageSampler, image_descriptor *imageInfo, size_t lod, char *imagePtr)
+int validate_image_2D_sRGB_results(
+    void *imageValues, void *resultValues, double formatAbsoluteError,
+    float *xOffsetValues, float *yOffsetValues, ExplicitType outputType,
+    int &numTries, int &numClamped, image_sampler_data *imageSampler,
+    image_descriptor *imageInfo, size_t lod, char *imagePtr,
+    const image_test_context_t &ctx)
 {
     // Validate results element by element
     size_t width_lod = (imageInfo->width >> lod ) ?(imageInfo->width >> lod ) : 1;
@@ -964,7 +1006,7 @@ int validate_image_2D_sRGB_results(void *imageValues, void *resultValues, double
         // Validate float results
         float *resultPtr = (float *)(char *)resultValues;
         float expected[4], error=0.0f;
-        float maxErr = get_max_relative_error( imageInfo->format, imageSampler, 0 /*not 3D*/, CL_FILTER_LINEAR == imageSampler->filter_mode );
+
         for( size_t y = 0, j = 0; y < height_lod; y++ )
         {
             for( size_t x = 0; x < width_lod; x++, j++ )
@@ -975,12 +1017,15 @@ int validate_image_2D_sRGB_results(void *imageValues, void *resultValues, double
                 int checkOnlyOnePixel = 0;
                 int found_pixel = 0;
                 float offset = NORM_OFFSET;
-                if (!imageSampler->normalized_coords ||  imageSampler->filter_mode != CL_FILTER_NEAREST || NORM_OFFSET == 0
+                if (!imageSampler->normalized_coords
+                    || imageSampler->filter_mode != CL_FILTER_NEAREST
+                    || NORM_OFFSET == 0
 #if defined( __APPLE__ )
-                    // Apple requires its CPU implementation to do correctly rounded address arithmetic in all modes
-                    || gDeviceType != CL_DEVICE_TYPE_GPU
+                    // Apple requires its CPU implementation to do correctly
+                    // rounded address arithmetic in all modes
+                    || !(gDeviceType & CL_DEVICE_TYPE_GPU)
 #endif
-                    )
+                )
                     offset = 0.0f;          // Loop only once
 
                 for (float norm_offset_x = -offset; norm_offset_x <= offset && !found_pixel; norm_offset_x += NORM_OFFSET) {
@@ -990,7 +1035,7 @@ int validate_image_2D_sRGB_results(void *imageValues, void *resultValues, double
                         // Try sampling the pixel, without flushing denormals.
                         int containsDenormals = 0;
                         FloatPixel maxPixel;
-                        if ( gTestMipmaps )
+                        if (ctx.testMipmaps)
                             maxPixel = sample_image_pixel_float_offset( imagePtr, imageInfo,
                                                                         xOffsetValues[ j ], yOffsetValues[ j ], 0.0f, norm_offset_x, norm_offset_y, 0.0f,
                                                                         imageSampler, expected, 0, &containsDenormals, lod );
@@ -1018,7 +1063,7 @@ int validate_image_2D_sRGB_results(void *imageValues, void *resultValues, double
                                 // max error needs to be adjusted
                                 maxErr += 4 * FLT_MIN;
 
-                                if(gTestMipmaps)
+                                if (ctx.testMipmaps)
                                     maxPixel = sample_image_pixel_float_offset( imagePtr, imageInfo,
                                                                                  xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                                                  imageSampler, expected, 0, NULL,lod );
@@ -1054,7 +1099,12 @@ int validate_image_2D_sRGB_results(void *imageValues, void *resultValues, double
 
                             // If we are not on a GPU, or we are not normalized, then only test with offsets (0.0, 0.0)
                             // E.g., test one pixel.
-                            if (!imageSampler->normalized_coords || gDeviceType != CL_DEVICE_TYPE_GPU || NORM_OFFSET == 0) {
+                            if (!imageSampler->normalized_coords
+#if defined(__APPLE__)
+                                || !(gDeviceType & CL_DEVICE_TYPE_GPU)
+#endif
+                                || NORM_OFFSET == 0)
+                            {
                                 norm_offset_x = 0.0f;
                                 norm_offset_y = 0.0f;
                                 checkOnlyOnePixel = 1;
@@ -1062,7 +1112,7 @@ int validate_image_2D_sRGB_results(void *imageValues, void *resultValues, double
 
                             int containsDenormals = 0;
                             FloatPixel maxPixel;
-                            if(gTestMipmaps)
+                            if (ctx.testMipmaps)
                                 maxPixel = sample_image_pixel_float_offset( imagePtr, imageInfo,
                                                                                         xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                                                         imageSampler, expected, 0, &containsDenormals, lod );
@@ -1089,7 +1139,7 @@ int validate_image_2D_sRGB_results(void *imageValues, void *resultValues, double
                                     // If implementation decide to flush subnormals to zero,
                                     // max error needs to be adjusted
                                     maxErr += 4 * FLT_MIN;
-                                    if(gTestMipmaps)
+                                    if (ctx.testMipmaps)
                                         maxPixel = sample_image_pixel_float_offset( imagePtr, imageInfo,
                                                                                      xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
                                                                                      imageSampler, expected, 0, NULL, lod );
@@ -1113,19 +1163,34 @@ int validate_image_2D_sRGB_results(void *imageValues, void *resultValues, double
                                 log_error("FAILED norm_offsets: %g , %g:\n", norm_offset_x, norm_offset_y);
 
                                 float tempOut[4];
-                                shouldReturn |= determine_validation_error<float>( imagePtr, imageInfo, imageSampler, resultPtr,
-                                                                                  expected, error, xOffsetValues[ j ], yOffsetValues[ j ], norm_offset_x, norm_offset_y, j, numTries, numClamped, true, lod );
+                                shouldReturn |=
+                                    determine_validation_error<float>(
+                                        imagePtr, imageInfo, imageSampler,
+                                        resultPtr, expected, error,
+                                        xOffsetValues[j], yOffsetValues[j],
+                                        norm_offset_x, norm_offset_y, j,
+                                        numTries, numClamped, true, lod, ctx);
 
                                 log_error( "Step by step:\n" );
                                 FloatPixel temp;
-                                if( gTestMipmaps )
-                                     temp = sample_image_pixel_float_offset( imagePtr, imageInfo,
-                                                                                    xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
-                                                                                    imageSampler, tempOut, 1 /* verbose */, &containsDenormals /*dont flush while error reporting*/, lod );
-                                 else
-                                     temp = sample_image_pixel_float_offset( imageValues, imageInfo,
-                                                                                    xOffsetValues[ j ], yOffsetValues[ j ], 0.f, norm_offset_x, norm_offset_y, 0.0f,
-                                                                                    imageSampler, tempOut, 1 /* verbose */, &containsDenormals /*dont flush while error reporting*/ );
+                                if (ctx.testMipmaps)
+                                    temp = sample_image_pixel_float_offset(
+                                        imagePtr, imageInfo, xOffsetValues[j],
+                                        yOffsetValues[j], 0.f, norm_offset_x,
+                                        norm_offset_y, 0.0f, imageSampler,
+                                        tempOut, 1 /* verbose */,
+                                        &containsDenormals /*dont flush while
+                                                              error reporting*/
+                                        ,
+                                        lod);
+                                else
+                                    temp =
+                                        sample_image_pixel_float_offset(
+                                            imageValues, imageInfo,
+                                            xOffsetValues[j], yOffsetValues[j],
+                                            0.f, norm_offset_x, norm_offset_y,
+                                            0.0f, imageSampler, tempOut,
+                                            1 /* verbose */, &containsDenormals /*dont flush while error reporting*/);
                                 log_error( "\tulps: %2.2f, %2.2f, %2.2f, %2.2f  (max allowed: %2.2f)\n\n",
                                                     Ulp_Error( resultPtr[0], expected[0] ),
                                                     Ulp_Error( resultPtr[1], expected[1] ),
@@ -1198,13 +1263,15 @@ bool validate_half_write_results( cl_half *expected, cl_half *actual, image_desc
     return pass;
 }
 
-int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel kernel,
-                        image_descriptor *imageInfo, image_sampler_data *imageSampler,
-                       bool useFloatCoords, ExplicitType outputType, MTdata d )
+int test_read_image_2D(cl_context context, cl_command_queue queue,
+                       cl_kernel kernel, image_descriptor *imageInfo,
+                       image_sampler_data *imageSampler, bool useFloatCoords,
+                       ExplicitType outputType, MTdata d,
+                       const image_test_context_t &ctx)
 {
     int error;
     static int initHalf = 0;
-    cl_mem imageBuffer;
+    cl_mem imageBuffer = nullptr;
     cl_mem_flags    image_read_write_flags = CL_MEM_READ_ONLY;
     size_t threads[2];
 
@@ -1224,10 +1291,10 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
     BufferOwningPtr<char> imageValues;
     generate_random_image_data( imageInfo, imageValues, d );
 
-    if( gDebugTrace )
+    if (ctx.debugTrace)
     {
         log_info( " - Creating image %d by %d...\n", (int)imageInfo->width, (int)imageInfo->height );
-        if( gTestMipmaps )
+        if (ctx.testMipmaps)
         {
             log_info( " - with %d mip levels", (int) imageInfo->num_mip_levels );
         }
@@ -1238,7 +1305,7 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
     clMemWrapper unprotImage;
     cl_mem image;
 
-    if(gtestTypesToRun & kReadTests)
+    if (ctx.testTypesToRun & kReadTests)
     {
         image_read_write_flags = CL_MEM_READ_ONLY;
     }
@@ -1247,9 +1314,9 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
         image_read_write_flags = CL_MEM_READ_WRITE;
     }
 
-    if( gMemFlagsToUse == CL_MEM_USE_HOST_PTR )
+    if (ctx.memFlagsToUse == CL_MEM_USE_HOST_PTR)
     {
-        if (gTestImage2DFromBuffer)
+        if (ctx.testImage2DFromBuffer)
         {
             generate_random_image_data( imageInfo, maxImageUseHostPtrBackingStore, d );
             imageBuffer = clCreateBuffer( context, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR,
@@ -1266,13 +1333,14 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
         {
             // clProtectedImage uses USE_HOST_PTR, so just rely on that for the testing (via Ian)
             // Do not use protected images for max image size test since it rounds the row size to a page size
-            if (gTestMaxImages) {
+            if (ctx.testMaxImages)
+            {
                 generate_random_image_data( imageInfo, maxImageUseHostPtrBackingStore, d );
-                unprotImage = create_image_2d( context,
-                                        image_read_write_flags | CL_MEM_USE_HOST_PTR,
-                                        imageInfo->format,
-                                        imageInfo->width, imageInfo->height, ( gEnablePitch ? imageInfo->rowPitch : 0 ),
-                                        maxImageUseHostPtrBackingStore, &error );
+                unprotImage = create_image_2d(
+                    context, image_read_write_flags | CL_MEM_USE_HOST_PTR,
+                    imageInfo->format, imageInfo->width, imageInfo->height,
+                    (ctx.enablePitch ? imageInfo->rowPitch : 0),
+                    maxImageUseHostPtrBackingStore, &error);
             }
             else
             {
@@ -1284,7 +1352,8 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
 
         if( error != CL_SUCCESS )
         {
-            if (gTestImage2DFromBuffer) {
+            if (ctx.testImage2DFromBuffer)
+            {
                 clReleaseMemObject(imageBuffer);
                 if (error == CL_INVALID_IMAGE_FORMAT_DESCRIPTOR) {
                     log_info( "Format not supported for cl_khr_image2d_from_buffer skipping...\n" );
@@ -1296,14 +1365,14 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
             return error;
         }
 
-        if (gTestMaxImages || gTestImage2DFromBuffer)
+        if (ctx.testMaxImages || ctx.testImage2DFromBuffer)
             image = (cl_mem)unprotImage;
         else
             image = (cl_mem)protImage;
     }
-    else if( gMemFlagsToUse == CL_MEM_COPY_HOST_PTR )
+    else if (ctx.memFlagsToUse == CL_MEM_COPY_HOST_PTR)
     {
-        if (gTestImage2DFromBuffer)
+        if (ctx.testImage2DFromBuffer)
         {
             imageBuffer = clCreateBuffer( context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR,
                                          imageInfo->rowPitch * imageInfo->height, imageValues, &error);
@@ -1318,15 +1387,16 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
         else
         {
             // Don't use clEnqueueWriteImage; just use copy host ptr to get the data in
-            unprotImage = create_image_2d( context,
-                                      image_read_write_flags | CL_MEM_COPY_HOST_PTR,
-                                      imageInfo->format,
-                                      imageInfo->width, imageInfo->height, ( gEnablePitch ? imageInfo->rowPitch : 0 ),
-                                      imageValues, &error );
+            unprotImage = create_image_2d(
+                context, image_read_write_flags | CL_MEM_COPY_HOST_PTR,
+                imageInfo->format, imageInfo->width, imageInfo->height,
+                (ctx.enablePitch ? imageInfo->rowPitch : 0), imageValues,
+                &error);
         }
         if( error != CL_SUCCESS )
         {
-            if (gTestImage2DFromBuffer) {
+            if (ctx.testImage2DFromBuffer)
+            {
                 clReleaseMemObject(imageBuffer);
                 if (error == CL_INVALID_IMAGE_FORMAT_DESCRIPTOR) {
                     log_info( "Format not supported for cl_khr_image2d_from_buffer skipping...\n" );
@@ -1341,7 +1411,7 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
     }
     else // Either CL_MEM_ALLOC_HOST_PTR or none
     {
-        if( gTestMipmaps )
+        if (ctx.testMipmaps)
         {
             cl_image_desc image_desc = {0};
             image_desc.image_type = CL_MEM_OBJECT_IMAGE2D;
@@ -1350,10 +1420,11 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
             image_desc.num_mip_levels = imageInfo->num_mip_levels;
             unprotImage = clCreateImage( context, CL_MEM_READ_ONLY, imageInfo->format, &image_desc, NULL, &error);
         }
-        else if (gTestImage2DFromBuffer)
+        else if (ctx.testImage2DFromBuffer)
         {
-            imageBuffer = clCreateBuffer( context, CL_MEM_READ_WRITE | gMemFlagsToUse,
-                                         imageInfo->rowPitch * imageInfo->height, imageValues, &error);
+            imageBuffer = clCreateBuffer(
+                context, CL_MEM_READ_WRITE | ctx.memFlagsToUse,
+                imageInfo->rowPitch * imageInfo->height, imageValues, &error);
             test_error( error, "Unable to create buffer" );
             unprotImage = create_image_2d_buffer( context,
                                                  image_read_write_flags,
@@ -1366,15 +1437,16 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
         {
             // Note: if ALLOC_HOST_PTR is used, the driver allocates memory that can be accessed by the host, but otherwise
             // it works just as if no flag is specified, so we just do the same thing either way
-            unprotImage = create_image_2d( context,
-                                      image_read_write_flags | gMemFlagsToUse,
-                                      imageInfo->format,
-                                      imageInfo->width, imageInfo->height, ( gEnablePitch ? imageInfo->rowPitch : 0 ),
-                                      imageValues, &error );
+            unprotImage = create_image_2d(
+                context, image_read_write_flags | ctx.memFlagsToUse,
+                imageInfo->format, imageInfo->width, imageInfo->height,
+                (ctx.enablePitch ? imageInfo->rowPitch : 0), imageValues,
+                &error);
         }
         if( error != CL_SUCCESS )
         {
-            if (gTestImage2DFromBuffer) {
+            if (ctx.testImage2DFromBuffer)
+            {
                 clReleaseMemObject(imageBuffer);
                 if (error == CL_INVALID_IMAGE_FORMAT_DESCRIPTOR) {
                     log_info( "Format not supported for cl_khr_image2d_from_buffer skipping...\n" );
@@ -1388,19 +1460,19 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
         image = unprotImage;
     }
 
-    if( gMemFlagsToUse != CL_MEM_COPY_HOST_PTR )
+    if (ctx.memFlagsToUse != CL_MEM_COPY_HOST_PTR)
     {
-        if( gDebugTrace )
-            log_info( " - Writing image...\n" );
+        if (ctx.debugTrace) log_info(" - Writing image...\n");
 
         size_t origin[ 3 ] = { 0, 0, 0 };
         size_t region[ 3 ] = { imageInfo->width, imageInfo->height, 1 };
 
-        if(!gTestMipmaps)
+        if (!ctx.testMipmaps)
         {
-            error = clEnqueueWriteImage(queue, image, CL_TRUE,
-                                        origin, region, ( gEnablePitch ? imageInfo->rowPitch : 0 ), 0,
-                                       imageValues, 0, NULL, NULL);
+            error =
+                clEnqueueWriteImage(queue, image, CL_TRUE, origin, region,
+                                    (ctx.enablePitch ? imageInfo->rowPitch : 0),
+                                    0, imageValues, 0, NULL, NULL);
             if (error != CL_SUCCESS)
             {
                 log_error( "ERROR: Unable to write to 2D image of size %d x %d\n", (int)imageInfo->width, (int)imageInfo->height );
@@ -1413,9 +1485,12 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
             for(size_t level = 0; level < imageInfo->num_mip_levels; level++)
             {
                 origin[2] = level;
-                error = clEnqueueWriteImage(queue, image, CL_TRUE,
-                                            origin, region, (( gEnablePitch || gTestImage2DFromBuffer) ? imageInfo->rowPitch : 0 ), 0,
-                                            (char*)imageValues + tmpNextLevelOffset, 0, NULL, NULL);
+                error = clEnqueueWriteImage(
+                    queue, image, CL_TRUE, origin, region,
+                    ((ctx.enablePitch || ctx.testImage2DFromBuffer)
+                         ? imageInfo->rowPitch
+                         : 0),
+                    0, (char *)imageValues + tmpNextLevelOffset, 0, NULL, NULL);
                 tmpNextLevelOffset += region[0]*region[1]*get_pixel_size(imageInfo->format);
                 region[0] = (region[0] >> 1) ? (region[0] >> 1) : 1;
                 region[1] = (region[1] >> 1) ? (region[1] >> 1) : 1;
@@ -1423,8 +1498,7 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
         }
     }
 
-    if( gDebugTrace )
-        log_info( " - Creating kernel arguments...\n" );
+    if (ctx.debugTrace) log_info(" - Creating kernel arguments...\n");
 
     xOffsets =
         clCreateBuffer(context, CL_MEM_COPY_HOST_PTR,
@@ -1443,14 +1517,15 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
     test_error( error, "Unable to create result buffer" );
 
     // Create sampler to use
-    actualSampler = create_sampler(context, imageSampler, gTestMipmaps, &error);
+    actualSampler =
+        create_sampler(context, imageSampler, ctx.testMipmaps, &error);
     test_error(error, "Unable to create image sampler");
 
     // Set arguments
     int idx = 0;
     error = clSetKernelArg( kernel, idx++, sizeof( cl_mem ), &image );
     test_error( error, "Unable to set kernel arguments" );
-    if( !gUseKernelSamplers )
+    if (!ctx.useKernelSamplers)
     {
         error = clSetKernelArg( kernel, idx++, sizeof( cl_sampler ), &actualSampler );
         test_error( error, "Unable to set kernel arguments" );
@@ -1469,19 +1544,21 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
     int loopCount = 2 * float_offset_count;
     if( ! useFloatCoords )
         loopCount = 1;
-    if (gTestMaxImages) {
+    if (ctx.testMaxImages)
+    {
         loopCount = 1;
       log_info("Testing each size only once with pixel offsets of %g for max sized images.\n", float_offsets[0]);
     }
 
-    if(gtestTypesToRun & kReadWriteTests)
+    if (ctx.testTypesToRun & kReadWriteTests)
     {
         loopCount = 1;
     }
 
     // Get the maximum absolute error for this format
     double formatAbsoluteError = get_max_absolute_error(imageInfo->format, imageSampler);
-    if (gDebugTrace) log_info("\tformatAbsoluteError is %e\n", formatAbsoluteError);
+    if (ctx.debugTrace)
+        log_info("\tformatAbsoluteError is %e\n", formatAbsoluteError);
 
     if (0 == initHalf && imageInfo->format->image_channel_data_type == CL_HALF_FLOAT ) {
         initHalf = CL_SUCCESS == DetectFloatToHalfRoundingMode( queue );
@@ -1492,16 +1569,17 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
 
     size_t nextLevelOffset = 0;
     size_t width_lod = imageInfo->width, height_lod = imageInfo->height;
-    for( size_t lod = 0; (gTestMipmaps && (lod < imageInfo->num_mip_levels))|| (!gTestMipmaps && lod < 1); lod ++)
+    for (size_t lod = 0; (ctx.testMipmaps && (lod < imageInfo->num_mip_levels))
+         || (!ctx.testMipmaps && lod < 1);
+         lod++)
     {
         size_t resultValuesSize = width_lod * height_lod * get_explicit_type_size( outputType ) * 4;
         BufferOwningPtr<char> resultValues(malloc(resultValuesSize));
         float lod_float = (float)lod;
         char *imagePtr = (char *)imageValues + nextLevelOffset;
-        if( gTestMipmaps )
+        if (ctx.testMipmaps)
         {
-            if(gDebugTrace)
-                log_info("\t- Working at mip level %d\n", lod);
+            if (ctx.debugTrace) log_info("\t- Working at mip level %zu\n", lod);
             error = clSetKernelArg( kernel, idx, sizeof(float), &lod_float);
         }
 
@@ -1511,9 +1589,11 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
             float offset = float_offsets[ q % float_offset_count ];
 
             // Init the coordinates
-            InitFloatCoords( imageInfo, imageSampler, xOffsetValues, yOffsetValues,
-                                q>=float_offset_count ? -offset: offset,
-                                q>=float_offset_count ? offset: -offset, imageSampler->normalized_coords, d, lod );
+            InitFloatCoords(imageInfo, imageSampler, xOffsetValues,
+                            yOffsetValues,
+                            q >= float_offset_count ? -offset : offset,
+                            q >= float_offset_count ? offset : -offset,
+                            imageSampler->normalized_coords, d, lod, ctx);
 
             error = clEnqueueWriteBuffer( queue, xOffsets, CL_TRUE, 0, sizeof(cl_float) * imageInfo->height * imageInfo->width, xOffsetValues, 0, NULL, NULL );
             test_error( error, "Unable to write x offsets" );
@@ -1530,33 +1610,43 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
             error = clEnqueueNDRangeKernel( queue, kernel, 2, NULL, threads, NULL, 0, NULL, NULL );
             test_error( error, "Unable to run kernel" );
 
-            if( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( "    reading results, %ld kbytes\n", (unsigned long)( width_lod * height_lod * get_explicit_type_size( outputType ) * 4 / 1024 ) );
 
             error = clEnqueueReadBuffer( queue, results, CL_TRUE, 0, width_lod * height_lod * get_explicit_type_size( outputType ) * 4, resultValues, 0, NULL, NULL ); //XXX check
             test_error( error, "Unable to read results from kernel" );
-            if( gDebugTrace )
-                log_info( "    results read\n" );
+            if (ctx.debugTrace) log_info("    results read\n");
 
             int retCode;
             switch (imageInfo->format->image_channel_order) {
             case CL_DEPTH:
-                retCode = validate_image_2D_depth_results((char*)imageValues + nextLevelOffset, resultValues, formatAbsoluteError, xOffsetValues, yOffsetValues, outputType, numTries, numClamped, imageSampler, imageInfo, lod, imagePtr);
+                retCode = validate_image_2D_depth_results(
+                    (char *)imageValues + nextLevelOffset, resultValues,
+                    formatAbsoluteError, xOffsetValues, yOffsetValues,
+                    outputType, numTries, numClamped, imageSampler, imageInfo,
+                    lod, imagePtr, ctx);
                 break;
             case CL_sRGB:
             case CL_sRGBx:
             case CL_sRGBA:
             case CL_sBGRA:
-                retCode = validate_image_2D_sRGB_results((char*)imageValues + nextLevelOffset, resultValues, formatAbsoluteError, xOffsetValues, yOffsetValues, outputType, numTries, numClamped, imageSampler, imageInfo, lod, imagePtr);
+                retCode = validate_image_2D_sRGB_results(
+                    (char *)imageValues + nextLevelOffset, resultValues,
+                    formatAbsoluteError, xOffsetValues, yOffsetValues,
+                    outputType, numTries, numClamped, imageSampler, imageInfo,
+                    lod, imagePtr, ctx);
                 break;
             default:
-                retCode = validate_image_2D_results((char*)imageValues + nextLevelOffset, resultValues, formatAbsoluteError, xOffsetValues, yOffsetValues, outputType, numTries, numClamped, imageSampler, imageInfo, lod, imagePtr);
+                retCode = validate_image_2D_results(
+                    (char *)imageValues + nextLevelOffset, resultValues,
+                    formatAbsoluteError, xOffsetValues, yOffsetValues,
+                    outputType, numTries, numClamped, imageSampler, imageInfo,
+                    lod, imagePtr, ctx);
             }
             if (retCode)
                 return retCode;
         }
-        end:
-        if ( gTestMipmaps )
+        if (ctx.testMipmaps)
         {
             nextLevelOffset += width_lod * height_lod * get_pixel_size( imageInfo->format );
             width_lod = (width_lod >> 1) ? (width_lod >> 1) : 1;
@@ -1564,7 +1654,7 @@ int test_read_image_2D( cl_context context, cl_command_queue queue, cl_kernel ke
         }
     }
 
-    if (gTestImage2DFromBuffer) clReleaseMemObject(imageBuffer);
+    if (ctx.testImage2DFromBuffer) clReleaseMemObject(imageBuffer);
 
     return numTries != MAX_TRIES || numClamped != MAX_CLAMPED;
 }
@@ -1573,7 +1663,8 @@ int test_read_image_set_2D(cl_device_id device, cl_context context,
                            cl_command_queue queue,
                            const cl_image_format *format,
                            image_sampler_data *imageSampler, bool floatCoords,
-                           ExplicitType outputType)
+                           ExplicitType outputType,
+                           const image_test_context_t &ctx)
 {
     char programSrc[10240];
     const char *ptr;
@@ -1582,7 +1673,7 @@ int test_read_image_set_2D(cl_device_id device, cl_context context,
     clKernelWrapper kernel;
     const char *KernelSourcePattern = NULL;
 
-    if (gTestImage2DFromBuffer)
+    if (ctx.testImage2DFromBuffer)
     {
         if (format->image_channel_order == CL_RGB || format->image_channel_order == CL_RGBx)
         {
@@ -1645,13 +1736,13 @@ int test_read_image_set_2D(cl_device_id device, cl_context context,
     // Construct the source
     const char *samplerArg = samplerKernelArg;
     char samplerVar[ 1024 ] = "";
-    if( gUseKernelSamplers )
+    if (ctx.useKernelSamplers)
     {
         get_sampler_kernel_code( imageSampler, samplerVar );
         samplerArg = "";
     }
 
-    if(gtestTypesToRun & kReadTests)
+    if (ctx.testTypesToRun & kReadTests)
     {
         KernelSourcePattern = read2DKernelSourcePattern;
     }
@@ -1661,42 +1752,53 @@ int test_read_image_set_2D(cl_device_id device, cl_context context,
     }
 
 
-    sprintf( programSrc, KernelSourcePattern,
-            (format->image_channel_order == CL_DEPTH) ? "image2d_depth_t" : "image2d_t",
-            samplerArg, get_explicit_type_name( outputType ),
+    sprintf(programSrc, KernelSourcePattern,
+            ctx.testMipmaps
+                ? "#pragma OPENCL EXTENSION cl_khr_mipmap_image: enable"
+                : "",
+            (format->image_channel_order == CL_DEPTH) ? "image2d_depth_t"
+                                                      : "image2d_t",
+            samplerArg, get_explicit_type_name(outputType),
             (format->image_channel_order == CL_DEPTH) ? "" : "4",
-            gTestMipmaps?", float lod":" ",
-            samplerVar,
-            gTestMipmaps? lodOffsetSource : offsetSource,
-            floatCoords ? floatKernelSource : intCoordKernelSource,
-            readFormat,
-            gTestMipmaps?", lod":" ");
+            ctx.testMipmaps ? ", float lod" : " ", samplerVar,
+            ctx.testMipmaps ? lodOffsetSource : offsetSource,
+            floatCoords ? floatKernelSource : intCoordKernelSource, readFormat,
+            ctx.testMipmaps ? ", lod" : " ");
 
     ptr = programSrc;
     error = create_single_kernel_helper(context, &program, &kernel, 1, &ptr,
                                         "sample_kernel");
     test_error( error, "Unable to create testing kernel" );
 
-    if( gTestSmallImages )
+    if (ctx.testSmallImages)
     {
         for( imageInfo.width = 1; imageInfo.width < 13; imageInfo.width++ )
         {
-            imageInfo.rowPitch = imageInfo.width * pixelSize;
+            if (!is_width_compatible(imageInfo)) continue;
+            imageInfo.rowPitch = calculate_row_pitch(imageInfo, pixelSize);
+
             for( imageInfo.height = 1; imageInfo.height < 9; imageInfo.height++ )
             {
-                if( gTestMipmaps )
-                imageInfo.num_mip_levels = (size_t) random_in_range(2, compute_max_mip_levels(imageInfo.width, imageInfo.height, 0)-1, seed);
+                if (ctx.testMipmaps)
+                    imageInfo.num_mip_levels = (size_t)random_in_range(
+                        2,
+                        compute_max_mip_levels(imageInfo.width,
+                                               imageInfo.height, 0)
+                            - 1,
+                        seed);
 
-                if( gDebugTrace )
+                if (ctx.debugTrace)
                     log_info( "   at size %d,%d\n", (int)imageInfo.width, (int)imageInfo.height );
 
-                int retCode = test_read_image_2D( context, queue, kernel, &imageInfo, imageSampler, floatCoords, outputType, seed );
+                int retCode = test_read_image_2D(
+                    context, queue, kernel, &imageInfo, imageSampler,
+                    floatCoords, outputType, seed, ctx);
                 if( retCode )
                     return retCode;
             }
         }
     }
-    else if( gTestMaxImages )
+    else if (ctx.testMaxImages)
     {
         // Try a specific set of maximum sizes
         size_t numbeOfSizes;
@@ -1706,17 +1808,37 @@ int test_read_image_set_2D(cl_device_id device, cl_context context,
 
         for( size_t idx = 0; idx < numbeOfSizes; idx++ )
         {
-            imageInfo.width = sizes[ idx ][ 0 ];
-            imageInfo.height = sizes[ idx ][ 1 ];
-            imageInfo.rowPitch = imageInfo.width * pixelSize;
-            log_info("Testing %d x %d\n", (int)sizes[ idx ][ 0 ], (int)sizes[ idx ][ 1 ]);
+            if (imageInfo.format->image_channel_data_type
+                == CL_UNSIGNED_INT_RAW10_EXT)
+            {
+                imageInfo.width = sizes[idx][0] & ~0x3ULL;
+            }
+            else if (imageInfo.format->image_channel_data_type
+                     == CL_UNSIGNED_INT_RAW12_EXT)
+            {
+                imageInfo.width = sizes[idx][0] & ~0x1ULL;
+            }
+            else
+            {
+                imageInfo.width = sizes[idx][0];
+            }
 
-            if( gTestMipmaps )
+            imageInfo.height = sizes[idx][1];
+            imageInfo.rowPitch = calculate_row_pitch(imageInfo, pixelSize);
+
+            if (0 == imageInfo.width) continue;
+
+            log_info("Testing %d x %d\n", (int)imageInfo.width,
+                     (int)imageInfo.height);
+
+            if (ctx.testMipmaps)
                 imageInfo.num_mip_levels = (size_t) random_in_range(2, compute_max_mip_levels(imageInfo.width, imageInfo.height, 0)-1, seed);
 
-            if( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( "   at max size %d,%d\n", (int)sizes[ idx ][ 0 ], (int)sizes[ idx ][ 1 ] );
-            int retCode = test_read_image_2D( context, queue, kernel, &imageInfo, imageSampler, floatCoords, outputType, seed );
+            int retCode = test_read_image_2D(context, queue, kernel, &imageInfo,
+                                             imageSampler, floatCoords,
+                                             outputType, seed, ctx);
             if( retCode )
                 return retCode;
         }
@@ -1737,23 +1859,29 @@ int test_read_image_set_2D(cl_device_id device, cl_context context,
             imageInfo.width >>= 1;
         imageInfo.rowPitch = imageInfo.width * pixelSize;
 
-        gRoundingStartValue = 0;
+        uint64_t roundingStartValue = 0;
         do
         {
-            if( gDebugTrace )
-                log_info( "   at size %d,%d, starting round ramp at %llu for range %llu\n", (int)imageInfo.width, (int)imageInfo.height, gRoundingStartValue, typeRange );
-            int retCode = test_read_image_2D( context, queue, kernel, &imageInfo, imageSampler, floatCoords, outputType, seed );
+            if (ctx.debugTrace)
+                log_info("   at size %d,%d, starting round ramp at %" PRIu64
+                         " for range %" PRIu64 "\n",
+                         (int)imageInfo.width, (int)imageInfo.height,
+                         roundingStartValue, typeRange);
+            int retCode = test_read_image_2D(context, queue, kernel, &imageInfo,
+                                             imageSampler, floatCoords,
+                                             outputType, seed, ctx);
             if( retCode )
                 return retCode;
 
-            gRoundingStartValue += imageInfo.width * imageInfo.height * pixelSize / get_format_type_size( imageInfo.format );
+            roundingStartValue += imageInfo.width * imageInfo.height * pixelSize
+                / get_format_type_size(imageInfo.format);
 
-        } while( gRoundingStartValue < typeRange );
+        } while (roundingStartValue < typeRange);
     }
     else
     {
         cl_uint imagePitchAlign = 0;
-        if (gTestImage2DFromBuffer)
+        if (ctx.testImage2DFromBuffer)
         {
 #if defined(CL_DEVICE_IMAGE_PITCH_ALIGNMENT)
             error = clGetDeviceInfo( device, CL_DEVICE_IMAGE_PITCH_ALIGNMENT, sizeof( cl_uint ), &imagePitchAlign, NULL );
@@ -1777,22 +1905,23 @@ int test_read_image_set_2D(cl_device_id device, cl_context context,
                 imageInfo.width = (size_t)random_log_in_range( 16, maxWidthRange, seed );
                 imageInfo.height = (size_t)random_log_in_range( 16, maxHeightRange, seed );
 
-                imageInfo.rowPitch = imageInfo.width * pixelSize;
-                if( gTestMipmaps )
+                imageInfo.rowPitch = calculate_row_pitch(imageInfo, pixelSize);
+
+                if (ctx.testMipmaps)
                 {
                     imageInfo.num_mip_levels = (size_t) random_in_range(2, compute_max_mip_levels(imageInfo.width, imageInfo.height, 0)-1, seed);
                     size = 4 * compute_mipmapped_image_size(imageInfo);
                 }
                 else
                 {
-                    if( gEnablePitch )
+                    if (ctx.enablePitch)
                     {
                         size_t extraWidth = (int)random_log_in_range( 0, 64, seed );
                         imageInfo.rowPitch += extraWidth * pixelSize;
                     }
 
                 // if we are creating a 2D image from a buffer, make sure that the rowpitch is aligned to CL_DEVICE_IMAGE_PITCH_ALIGNMENT_APPLE
-                    if (gTestImage2DFromBuffer)
+                    if (ctx.testImage2DFromBuffer)
                     {
                         size_t pitch = imagePitchAlign * pixelSize;
                         imageInfo.rowPitch = ((imageInfo.rowPitch + pitch - 1) / pitch ) * pitch;
@@ -1800,11 +1929,14 @@ int test_read_image_set_2D(cl_device_id device, cl_context context,
 
                     size = (size_t)imageInfo.rowPitch * (size_t)imageInfo.height * 4;
                 }
-            } while(  size > maxAllocSize || ( size * 3 ) > memSize );
+            } while (size > maxAllocSize || (size * 3) > memSize
+                     || !is_width_compatible(imageInfo));
 
-            if( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( "   at size %d,%d (row pitch %d) out of %d,%d\n", (int)imageInfo.width, (int)imageInfo.height, (int)imageInfo.rowPitch, (int)maxWidth, (int)maxHeight );
-            int retCode = test_read_image_2D( context, queue, kernel, &imageInfo, imageSampler, floatCoords, outputType, seed );
+            int retCode = test_read_image_2D(context, queue, kernel, &imageInfo,
+                                             imageSampler, floatCoords,
+                                             outputType, seed, ctx);
             if( retCode )
                 return retCode;
         }

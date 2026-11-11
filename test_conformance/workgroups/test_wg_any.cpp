@@ -20,8 +20,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#include "procs.h"
-
+#include "testBase.h"
 
 const char *wg_any_kernel_code =
 "__kernel void test_wg_any(global float *input, global int *output)\n"
@@ -54,7 +53,9 @@ verify_wg_any(float *inptr, int *outptr, size_t n, size_t wg_size)
             if ( (predicate_any && (outptr[i+j] == 0)) ||
                  ((predicate_any == 0) && outptr[i+j]) )
             {
-                log_info("work_group_any: Error at %lu: expected = %d, got = %d\n", i+j, predicate_any, outptr[i+j]);
+                log_info(
+                    "work_group_any: Error at %zu: expected = %d, got = %d\n",
+                    i + j, predicate_any, outptr[i + j]);
                 return -1;
             }
         }
@@ -63,20 +64,16 @@ verify_wg_any(float *inptr, int *outptr, size_t n, size_t wg_size)
     return 0;
 }
 
-int
-test_work_group_any(cl_device_id device, cl_context context, cl_command_queue queue, int n_elems)
+REGISTER_TEST_VERSION(work_group_any, Version(2, 0))
 {
     cl_mem       streams[2];
     cl_float     *input_ptr[1], *p;
     cl_int       *output_ptr;
     cl_program   program;
     cl_kernel    kernel;
-    void         *values[2];
     size_t       threads[1];
-    size_t       wg_size[1];
-    size_t       num_elements;
+    size_t wg_size[1];
     int          err;
-    int          i;
     MTdata       d;
 
     err = create_single_kernel_helper(context, &program, &kernel, 1,
@@ -87,8 +84,6 @@ test_work_group_any(cl_device_id device, cl_context context, cl_command_queue qu
     // "wg_size" is limited to that of the first dimension as only a 1DRange is executed.
     err = get_max_allowed_1d_work_group_size_on_device(device, kernel, wg_size);
     test_error(err, "get_max_allowed_1d_work_group_size_on_device failed");
-
-    num_elements = n_elems;
 
     input_ptr[0] = (cl_float*)malloc(sizeof(cl_float) * (num_elements+1));
     output_ptr = (cl_int*)malloc(sizeof(cl_int) * (num_elements+1));
@@ -111,7 +106,7 @@ test_work_group_any(cl_device_id device, cl_context context, cl_command_queue qu
 
     p = input_ptr[0];
     d = init_genrand( gRandomSeed );
-    for (i=0; i<(num_elements+1); i++)
+    for (int i = 0; i < (num_elements + 1); i++)
     {
         p[i] = get_random_float((float)(-100000.f * M_PI), (float)(100000.f * M_PI) ,d);
     }
@@ -124,8 +119,6 @@ test_work_group_any(cl_device_id device, cl_context context, cl_command_queue qu
         return -1;
     }
 
-    values[0] = streams[0];
-    values[1] = streams[1];
     err = clSetKernelArg(kernel, 0, sizeof streams[0], &streams[0] );
     err |= clSetKernelArg(kernel, 1, sizeof streams[1], &streams[1] );
     if (err != CL_SUCCESS)
@@ -135,7 +128,7 @@ test_work_group_any(cl_device_id device, cl_context context, cl_command_queue qu
     }
 
     // Line below is troublesome...
-    threads[0] = (size_t)n_elems;
+    threads[0] = (size_t)num_elements;
     err = clEnqueueNDRangeKernel( queue, kernel, 1, NULL, threads, wg_size, 0, NULL, NULL );
     if (err != CL_SUCCESS)
     {

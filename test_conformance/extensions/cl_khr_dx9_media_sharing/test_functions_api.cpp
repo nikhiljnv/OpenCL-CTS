@@ -27,7 +27,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
     CResult result;
 
     // create device
-    std::auto_ptr<CDeviceWrapper> deviceWrapper;
+    std::unique_ptr<CDeviceWrapper> deviceWrapper;
     if (!DeviceCreate(adapterType, deviceWrapper))
     {
         result.ResultSub(CResult::TEST_ERROR);
@@ -87,7 +87,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
         }
 
         void *objectSharedHandle = 0;
-        std::auto_ptr<CSurfaceWrapper> surface;
+        std::unique_ptr<CSurfaceWrapper> surface;
 
         // create surface
         if (!MediaSurfaceCreate(
@@ -175,7 +175,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
 
             error = clEnqueueAcquireDX9MediaSurfacesKHR(
                 cmdQueue, static_cast<cl_uint>(memObjList.size()),
-                &memObjList[0], 0, 0, 0);
+                &memObjList[0], 0, NULL, NULL);
             if (error != CL_SUCCESS)
             {
                 log_error("clEnqueueAcquireDX9MediaSurfacesKHR failed: %s\n",
@@ -212,7 +212,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
                                 bufferRef1[frameIdx % FRAME_NUM], width,
                                 height))
                 {
-                    log_error("Frame idx: %i, OCL image is different then "
+                    log_error("Frame idx: %zu, OCL image is different then "
                               "shared OCL object: clEnqueueReadImage\n",
                               frameIdx);
                     result.ResultSub(CResult::TEST_FAIL);
@@ -271,7 +271,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
                                 bufferRef2[frameIdx % FRAME_NUM], width,
                                 height))
                 {
-                    log_error("Frame idx: %i, Shared OCL image verification "
+                    log_error("Frame idx: %zu, Shared OCL image verification "
                               "after clEnqueueWriteImage failed\n",
                               frameIdx);
                     result.ResultSub(CResult::TEST_FAIL);
@@ -337,7 +337,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
                                 height))
                 {
                     log_error(
-                        "Frame idx: %i, OCL image verification after "
+                        "Frame idx: %zu, OCL image verification after "
                         "clEnqueueCopyImage (from shared OCL to OCL) failed\n",
                         frameIdx);
                     result.ResultSub(CResult::TEST_FAIL);
@@ -409,7 +409,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
                                 height))
                 {
                     log_error(
-                        "Frame idx: %i, OCL image verification after "
+                        "Frame idx: %zu, OCL image verification after "
                         "clEnqueueCopyImage (from OCL to shared OCL) failed\n",
                         frameIdx);
                     result.ResultSub(CResult::TEST_FAIL);
@@ -461,7 +461,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
                                 bufferRef1[frameIdx % FRAME_NUM], width,
                                 height))
                 {
-                    log_error("Frame idx: %i, OCL buffer verification after "
+                    log_error("Frame idx: %zu, OCL buffer verification after "
                               "clEnqueueCopyImageToBuffer (from shared OCL "
                               "image to OCL buffer) failed\n",
                               frameIdx);
@@ -517,7 +517,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
                                 bufferRef2[frameIdx % FRAME_NUM], width,
                                 height))
                 {
-                    log_error("Frame idx: %i, OCL image verification after "
+                    log_error("Frame idx: %zu, OCL image verification after "
                               "clEnqueueCopyBufferToImage (from OCL buffer to "
                               "shared OCL image) failed\n",
                               frameIdx);
@@ -573,7 +573,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
                                 bufferRef2[frameIdx % FRAME_NUM], width,
                                 height))
                 {
-                    log_error("Frame idx: %i, Mapped shared OCL image is "
+                    log_error("Frame idx: %zu, Mapped shared OCL image is "
                               "different then expected\n",
                               frameIdx);
                     result.ResultSub(CResult::TEST_FAIL);
@@ -627,7 +627,7 @@ int api_functions(cl_device_id deviceID, cl_context context,
 
             error = clEnqueueReleaseDX9MediaSurfacesKHR(
                 cmdQueue, static_cast<cl_uint>(memObjList.size()),
-                &memObjList[0], 0, 0, 0);
+                &memObjList[0], 0, NULL, NULL);
             if (error != CL_SUCCESS)
             {
                 log_error("clEnqueueReleaseDX9MediaSurfacesKHR failed: %s\n",
@@ -646,9 +646,9 @@ int api_functions(cl_device_id deviceID, cl_context context,
             if (!YUVCompare(surfaceFormat, bufferOut,
                             bufferRef3[frameIdx % FRAME_NUM], width, height))
             {
-                log_error(
-                    "Frame idx: %i, media surface is different than expected\n",
-                    frameIdx);
+                log_error("Frame idx: %zu, media surface is different than "
+                          "expected\n",
+                          frameIdx);
                 result.ResultSub(CResult::TEST_FAIL);
             }
         }
@@ -674,14 +674,13 @@ int api_functions(cl_device_id deviceID, cl_context context,
     return result.Result();
 }
 
-int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
-             int num_elements)
+REGISTER_TEST(api)
 {
     CResult result;
 
 #if defined(_WIN32)
     // D3D9
-    if (api_functions(deviceID, context, queue, num_elements, 10, 256, 256,
+    if (api_functions(device, context, queue, num_elements, 10, 256, 256,
                       CL_ADAPTER_D3D9_KHR, SURFACE_FORMAT_NV12,
                       SHARED_HANDLE_DISABLED)
         != 0)
@@ -690,7 +689,7 @@ int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (api_functions(deviceID, context, queue, num_elements, 3, 512, 256,
+    if (api_functions(device, context, queue, num_elements, 3, 512, 256,
                       CL_ADAPTER_D3D9_KHR, SURFACE_FORMAT_YV12,
                       SHARED_HANDLE_DISABLED)
         != 0)
@@ -700,7 +699,7 @@ int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
     }
 
     // D3D9EX
-    if (api_functions(deviceID, context, queue, num_elements, 5, 256, 512,
+    if (api_functions(device, context, queue, num_elements, 5, 256, 512,
                       CL_ADAPTER_D3D9EX_KHR, SURFACE_FORMAT_NV12,
                       SHARED_HANDLE_DISABLED)
         != 0)
@@ -709,7 +708,7 @@ int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (api_functions(deviceID, context, queue, num_elements, 7, 512, 256,
+    if (api_functions(device, context, queue, num_elements, 7, 512, 256,
                       CL_ADAPTER_D3D9EX_KHR, SURFACE_FORMAT_NV12,
                       SHARED_HANDLE_ENABLED)
         != 0)
@@ -718,7 +717,7 @@ int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (api_functions(deviceID, context, queue, num_elements, 10, 256, 256,
+    if (api_functions(device, context, queue, num_elements, 10, 256, 256,
                       CL_ADAPTER_D3D9EX_KHR, SURFACE_FORMAT_YV12,
                       SHARED_HANDLE_DISABLED)
         != 0)
@@ -727,7 +726,7 @@ int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (api_functions(deviceID, context, queue, num_elements, 15, 128, 128,
+    if (api_functions(device, context, queue, num_elements, 15, 128, 128,
                       CL_ADAPTER_D3D9EX_KHR, SURFACE_FORMAT_YV12,
                       SHARED_HANDLE_ENABLED)
         != 0)
@@ -737,7 +736,7 @@ int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
     }
 
     // DXVA
-    if (api_functions(deviceID, context, queue, num_elements, 20, 128, 128,
+    if (api_functions(device, context, queue, num_elements, 20, 128, 128,
                       CL_ADAPTER_DXVA_KHR, SURFACE_FORMAT_NV12,
                       SHARED_HANDLE_DISABLED)
         != 0)
@@ -746,7 +745,7 @@ int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (api_functions(deviceID, context, queue, num_elements, 40, 64, 64,
+    if (api_functions(device, context, queue, num_elements, 40, 64, 64,
                       CL_ADAPTER_DXVA_KHR, SURFACE_FORMAT_NV12,
                       SHARED_HANDLE_ENABLED)
         != 0)
@@ -755,7 +754,7 @@ int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (api_functions(deviceID, context, queue, num_elements, 5, 512, 512,
+    if (api_functions(device, context, queue, num_elements, 5, 512, 512,
                       CL_ADAPTER_DXVA_KHR, SURFACE_FORMAT_YV12,
                       SHARED_HANDLE_DISABLED)
         != 0)
@@ -764,7 +763,7 @@ int test_api(cl_device_id deviceID, cl_context context, cl_command_queue queue,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (api_functions(deviceID, context, queue, num_elements, 2, 1024, 1024,
+    if (api_functions(device, context, queue, num_elements, 2, 1024, 1024,
                       CL_ADAPTER_DXVA_KHR, SURFACE_FORMAT_YV12,
                       SHARED_HANDLE_ENABLED)
         != 0)

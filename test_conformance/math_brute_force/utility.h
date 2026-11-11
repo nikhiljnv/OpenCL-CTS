@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017 The Khronos Group Inc.
+// Copyright (c) 2017-2024 The Khronos Group Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,9 +19,12 @@
 #include "harness/compat.h"
 #include "harness/rounding_mode.h"
 #include "harness/fpcontrol.h"
+#include "harness/mathHelpers.h"
 #include "harness/testHarness.h"
 #include "harness/ThreadPool.h"
 #include "harness/conversions.h"
+#include "harness/parseParameters.h"
+#include "CL/cl_half.h"
 
 #define BUFFER_SIZE (1024 * 1024 * 2)
 #define EMBEDDED_REDUCTION_FACTOR (64)
@@ -58,14 +61,26 @@ extern cl_mem gOutBuffer2[VECTOR_SIZE_COUNT];
 extern int gSkipCorrectnessTesting;
 extern int gForceFTZ;
 extern int gFastRelaxedDerived;
-extern int gWimpyMode;
+extern int gHostFill;
 extern int gIsInRTZMode;
+extern int gHasHalf;
+extern int gHasDouble;
+extern int gTestFloat;
 extern int gInfNanSupport;
 extern int gIsEmbedded;
 extern int gVerboseBruteForce;
 extern uint32_t gMaxVectorSizeIndex;
 extern uint32_t gMinVectorSizeIndex;
 extern cl_device_fp_config gFloatCapabilities;
+extern cl_device_fp_config gHalfCapabilities;
+extern cl_device_fp_config gDoubleCapabilities;
+extern RoundingMode gFloatToHalfRoundingMode;
+
+extern cl_half_rounding_mode gHalfRoundingMode;
+
+#define HFF(num) cl_half_from_float(num, gHalfRoundingMode)
+#define HFD(num) cl_half_from_double(num, gHalfRoundingMode)
+#define HTF(num) cl_half_to_float(num)
 
 #define LOWER_IS_BETTER 0
 #define HIGHER_IS_BETTER 1
@@ -82,12 +97,6 @@ extern cl_device_fp_config gFloatCapabilities;
 float Abs_Error(float test, double reference);
 float Ulp_Error(float test, double reference);
 float Bruteforce_Ulp_Error_Double(double test, long double reference);
-
-int MakeKernel(const char **c, cl_uint count, const char *name, cl_kernel *k,
-               cl_program *p, bool relaxedMode);
-int MakeKernels(const char **c, cl_uint count, const char *name,
-                cl_uint kernel_count, cl_kernel *k, cl_program *p,
-                bool relaxedMode);
 
 // used to convert a bucket of bits into a search pattern through double
 inline double DoubleFromUInt32(uint32_t bits)
@@ -109,9 +118,6 @@ inline double DoubleFromUInt32(uint32_t bits)
     return u.d;
 }
 
-void _LogBuildError(cl_program p, int line, const char *file);
-#define LogBuildError(program) _LogBuildError(program, __LINE__, __FILE__)
-
 // The spec is fairly clear that we may enforce a hard cutoff to prevent
 // premature flushing to zero.
 // However, to avoid conflict for 1.0, we are letting results at TYPE_MIN +
@@ -120,6 +126,12 @@ inline int IsFloatResultSubnormal(double x, float ulps)
 {
     x = fabs(x) - MAKE_HEX_DOUBLE(0x1.0p-149, 0x1, -149) * (double)ulps;
     return x < MAKE_HEX_DOUBLE(0x1.0p-126, 0x1, -126);
+}
+
+inline int IsHalfResultSubnormal(float x, float ulps)
+{
+    x = fabs(x) - MAKE_HEX_FLOAT(0x1.0p-24, 0x1, -24) * ulps;
+    return x < MAKE_HEX_FLOAT(0x1.0p-14, 0x1, -14);
 }
 
 inline int IsFloatResultSubnormalAbsError(double x, float abs_err)
@@ -164,6 +176,16 @@ inline int IsFloatNaN(double x)
     return ((u.u & 0x7fffffffU) > 0x7F800000U);
 }
 
+inline bool IsHalfInfinity(const cl_half v)
+{
+    // Extract FP16 exponent and mantissa
+    uint16_t h_exp = (((cl_half)v) >> (CL_HALF_MANT_DIG - 1)) & 0x1F;
+    uint16_t h_mant = ((cl_half)v) & 0x3FF;
+
+    // Inf test
+    return (h_exp == 0x1F && h_mant == 0);
+}
+
 cl_uint RoundUpToNextPowerOfTwo(cl_uint x);
 
 // Windows (since long double got deprecated) sets the x87 to 53-bit precision
@@ -184,7 +206,8 @@ inline void Force64BitFPUPrecision(void)
     __asm__ __volatile__("fstcw %0" : "=m"(orig_cw));
     new_cw = orig_cw | 0x0300; // set precision to 64-bit
     __asm__ __volatile__("fldcw  %0" ::"m"(new_cw));
-#elif defined(_WIN32) && defined(__INTEL_COMPILER)
+#elif defined(_WIN32)                                                          \
+    && (defined(__INTEL_COMPILER) || defined(__INTEL_LLVM_COMPILER))
     // Unfortunately, usual method (`_controlfp( _PC_64, _MCW_PC );') does *not*
     // work on win.x64: > On the x64 architecture, changing the floating point
     // precision is not supported. (Taken from
@@ -226,7 +249,7 @@ int compareDoubles(double x, double y);
 void logFunctionInfo(const char *fname, unsigned int float_size,
                      unsigned int isFastRelaxed);
 
-float getAllowedUlpError(const Func *f, const bool relaxed);
+float getAllowedUlpError(const Func *f, Type t, const bool relaxed);
 
 inline cl_uint getTestScale(size_t typeSize)
 {

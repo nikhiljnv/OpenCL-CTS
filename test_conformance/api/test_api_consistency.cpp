@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
+#include <cinttypes>
+
 #include "testBase.h"
 #include "harness/testHarness.h"
 #include "harness/deviceInfo.h"
@@ -23,8 +25,7 @@ __kernel void test(__global int* dst) {
 }
 )CLC";
 
-int test_consistency_svm(cl_device_id deviceID, cl_context context,
-                         cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_svm, Version(3, 0))
 {
     // clGetDeviceInfo, passing CL_DEVICE_SVM_CAPABILITIES:
     // May return 0, indicating that device does not support Shared Virtual
@@ -37,8 +38,8 @@ int test_consistency_svm(cl_device_id deviceID, cl_context context,
     clKernelWrapper kernel;
 
     cl_device_svm_capabilities svmCaps = 0;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_SVM_CAPABILITIES,
-                            sizeof(svmCaps), &svmCaps, NULL);
+    error = clGetDeviceInfo(device, CL_DEVICE_SVM_CAPABILITIES, sizeof(svmCaps),
+                            &svmCaps, NULL);
     test_error(error, "Unable to query CL_DEVICE_SVM_CAPABILITIES");
 
     if (svmCaps == 0)
@@ -81,8 +82,8 @@ int test_consistency_svm(cl_device_id deviceID, cl_context context,
 
         // These calls purposefully pass bogus pointers to the functions to
         // better test that they are a NOP when SVM is not supported.
-        void* bogus0 = (void*)0xDEADBEEF;
-        void* bogus1 = (void*)0xDEADDEAD;
+        void* bogus0 = (void*)0xDEAD0000;
+        void* bogus1 = (void*)0xBEEF0000;
         cl_uint pattern = 0xAAAAAAAA;
         error = clEnqueueSVMMemFill(queue, bogus0, &pattern, sizeof(pattern),
                                     allocSize, 0, NULL, NULL);
@@ -158,8 +159,9 @@ static int check_atomic_capabilities(cl_device_atomic_capabilities atomicCaps,
 {
     if ((atomicCaps & requiredCaps) != requiredCaps)
     {
-        log_error("Atomic capabilities %llx is missing support for at least "
-                  "one required capability %llx!\n",
+        log_error("Atomic capabilities %" PRIx64
+                  " is missing support for at least "
+                  "one required capability %" PRIx64 "!\n",
                   atomicCaps, requiredCaps);
         return TEST_FAIL;
     }
@@ -199,13 +201,12 @@ static int check_atomic_capabilities(cl_device_atomic_capabilities atomicCaps,
     return TEST_PASS;
 }
 
-int test_consistency_memory_model(cl_device_id deviceID, cl_context context,
-                                  cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_memory_model, Version(3, 0))
 {
     cl_int error;
     cl_device_atomic_capabilities atomicCaps = 0;
 
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_ATOMIC_MEMORY_CAPABILITIES,
+    error = clGetDeviceInfo(device, CL_DEVICE_ATOMIC_MEMORY_CAPABILITIES,
                             sizeof(atomicCaps), &atomicCaps, NULL);
     test_error(error, "Unable to query CL_DEVICE_ATOMIC_MEMORY_CAPABILITIES");
 
@@ -218,7 +219,7 @@ int test_consistency_memory_model(cl_device_id deviceID, cl_context context,
         return error;
     }
 
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_ATOMIC_FENCE_CAPABILITIES,
+    error = clGetDeviceInfo(device, CL_DEVICE_ATOMIC_FENCE_CAPABILITIES,
                             sizeof(atomicCaps), &atomicCaps, NULL);
     test_error(error, "Unable to query CL_DEVICE_ATOMIC_FENCE_CAPABILITIES");
 
@@ -235,8 +236,7 @@ int test_consistency_memory_model(cl_device_id deviceID, cl_context context,
     return TEST_PASS;
 }
 
-int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
-                                    cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_device_enqueue, Version(3, 0))
 {
     // clGetDeviceInfo, passing CL_DEVICE_DEVICE_ENQUEUE_CAPABILITIES
     // May return 0, indicating that device does not support Device-Side Enqueue
@@ -244,7 +244,7 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
     cl_int error;
 
     cl_device_device_enqueue_capabilities dseCaps = 0;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_DEVICE_ENQUEUE_CAPABILITIES,
+    error = clGetDeviceInfo(device, CL_DEVICE_DEVICE_ENQUEUE_CAPABILITIES,
                             sizeof(dseCaps), &dseCaps, NULL);
     test_error(error, "Unable to query CL_DEVICE_DEVICE_ENQUEUE_CAPABILITIES");
 
@@ -255,7 +255,7 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
         // On-Device Queues.
 
         cl_command_queue_properties devQueueProps = 0;
-        error = clGetDeviceInfo(deviceID, CL_DEVICE_QUEUE_ON_DEVICE_PROPERTIES,
+        error = clGetDeviceInfo(device, CL_DEVICE_QUEUE_ON_DEVICE_PROPERTIES,
                                 sizeof(devQueueProps), &devQueueProps, NULL);
         test_error(error,
                    "Unable to query CL_DEVICE_QUEUE_ON_DEVICE_PROPERTIES");
@@ -275,7 +275,7 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
         cl_uint u = 0;
 
         error =
-            clGetDeviceInfo(deviceID, CL_DEVICE_QUEUE_ON_DEVICE_PREFERRED_SIZE,
+            clGetDeviceInfo(device, CL_DEVICE_QUEUE_ON_DEVICE_PREFERRED_SIZE,
                             sizeof(u), &u, NULL);
         test_error(error,
                    "Unable to query CL_DEVICE_QUEUE_ON_DEVICE_PREFERRED_SIZE");
@@ -284,7 +284,7 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
                           "but CL_DEVICE_QUEUE_ON_DEVICE_PREFERRED_SIZE "
                           "returned a non-zero value");
 
-        error = clGetDeviceInfo(deviceID, CL_DEVICE_QUEUE_ON_DEVICE_MAX_SIZE,
+        error = clGetDeviceInfo(device, CL_DEVICE_QUEUE_ON_DEVICE_MAX_SIZE,
                                 sizeof(u), &u, NULL);
         test_error(error, "Unable to query CL_DEVICE_QUEUE_ON_DEVICE_MAX_SIZE");
         test_assert_error(
@@ -292,7 +292,7 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
             "CL_DEVICE_DEVICE_ENQUEUE_CAPABILITIES returned 0 but "
             "CL_DEVICE_QUEUE_ON_DEVICE_MAX_SIZE returned a non-zero value");
 
-        error = clGetDeviceInfo(deviceID, CL_DEVICE_MAX_ON_DEVICE_QUEUES,
+        error = clGetDeviceInfo(device, CL_DEVICE_MAX_ON_DEVICE_QUEUES,
                                 sizeof(u), &u, NULL);
         test_error(error, "Unable to query CL_DEVICE_MAX_ON_DEVICE_QUEUES");
         test_assert_error(
@@ -300,7 +300,7 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
             "CL_DEVICE_DEVICE_ENQUEUE_CAPABILITIES returned 0 but "
             "CL_DEVICE_MAX_ON_DEVICE_QUEUES returned a non-zero value");
 
-        error = clGetDeviceInfo(deviceID, CL_DEVICE_MAX_ON_DEVICE_EVENTS,
+        error = clGetDeviceInfo(device, CL_DEVICE_MAX_ON_DEVICE_EVENTS,
                                 sizeof(u), &u, NULL);
         test_error(error, "Unable to query CL_DEVICE_MAX_ON_DEVICE_EVENTS");
         test_assert_error(
@@ -331,7 +331,7 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
         // clSetDefaultDeviceCommandQueue
         // Returns CL_INVALID_OPERATION if device does not support On-Device
         // Queues.
-        error = clSetDefaultDeviceCommandQueue(context, deviceID, NULL);
+        error = clSetDefaultDeviceCommandQueue(context, device, NULL);
         test_failure_error(error, CL_INVALID_OPERATION,
                            "CL_DEVICE_DEVICE_ENQUEUE_CAPABILITIES returned 0 "
                            "but clSetDefaultDeviceCommandQueue did not return "
@@ -344,7 +344,7 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
             // clSetDefaultDeviceCommandQueue
             // Returns CL_INVALID_OPERATION if device does not support a
             // replaceable default On-Device Queue.
-            error = clSetDefaultDeviceCommandQueue(context, deviceID, NULL);
+            error = clSetDefaultDeviceCommandQueue(context, device, NULL);
             test_failure_error(
                 error, CL_INVALID_OPERATION,
                 "CL_DEVICE_DEVICE_ENQUEUE_CAPABILITIES did not "
@@ -368,9 +368,9 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
         if ((dseCaps & CL_DEVICE_QUEUE_SUPPORTED) != 0)
         {
             cl_bool b;
-            error = clGetDeviceInfo(deviceID,
-                                    CL_DEVICE_GENERIC_ADDRESS_SPACE_SUPPORT,
-                                    sizeof(b), &b, NULL);
+            error =
+                clGetDeviceInfo(device, CL_DEVICE_GENERIC_ADDRESS_SPACE_SUPPORT,
+                                sizeof(b), &b, NULL);
             test_error(
                 error,
                 "Unable to query CL_DEVICE_GENERIC_ADDRESS_SPACE_SUPPORT");
@@ -384,16 +384,15 @@ int test_consistency_device_enqueue(cl_device_id deviceID, cl_context context,
     return TEST_PASS;
 }
 
-int test_consistency_pipes(cl_device_id deviceID, cl_context context,
-                           cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_pipes, Version(3, 0))
 {
     // clGetDeviceInfo, passing CL_DEVICE_PIPE_SUPPORT
     // May return CL_FALSE, indicating that device does not support Pipes.
     cl_int error;
 
     cl_bool pipeSupport = CL_FALSE;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_PIPE_SUPPORT,
-                            sizeof(pipeSupport), &pipeSupport, NULL);
+    error = clGetDeviceInfo(device, CL_DEVICE_PIPE_SUPPORT, sizeof(pipeSupport),
+                            &pipeSupport, NULL);
     test_error(error, "Unable to query CL_DEVICE_PIPE_SUPPORT");
 
     if (pipeSupport == CL_FALSE)
@@ -406,16 +405,15 @@ int test_consistency_pipes(cl_device_id deviceID, cl_context context,
 
         cl_uint u = 0;
 
-        error = clGetDeviceInfo(deviceID, CL_DEVICE_MAX_PIPE_ARGS, sizeof(u),
-                                &u, NULL);
+        error = clGetDeviceInfo(device, CL_DEVICE_MAX_PIPE_ARGS, sizeof(u), &u,
+                                NULL);
         test_error(error, "Unable to query CL_DEVICE_MAX_PIPE_ARGS");
         test_assert_error(u == 0,
                           "CL_DEVICE_PIPE_SUPPORT returned CL_FALSE, but "
                           "CL_DEVICE_MAX_PIPE_ARGS returned a non-zero value");
 
-        error =
-            clGetDeviceInfo(deviceID, CL_DEVICE_PIPE_MAX_ACTIVE_RESERVATIONS,
-                            sizeof(u), &u, NULL);
+        error = clGetDeviceInfo(device, CL_DEVICE_PIPE_MAX_ACTIVE_RESERVATIONS,
+                                sizeof(u), &u, NULL);
         test_error(error,
                    "Unable to query CL_DEVICE_PIPE_MAX_ACTIVE_RESERVATIONS");
         test_assert_error(u == 0,
@@ -423,7 +421,7 @@ int test_consistency_pipes(cl_device_id deviceID, cl_context context,
                           "CL_DEVICE_PIPE_MAX_ACTIVE_RESERVATIONS returned "
                           "a non-zero value");
 
-        error = clGetDeviceInfo(deviceID, CL_DEVICE_PIPE_MAX_PACKET_SIZE,
+        error = clGetDeviceInfo(device, CL_DEVICE_PIPE_MAX_PACKET_SIZE,
                                 sizeof(u), &u, NULL);
         test_error(error, "Unable to query CL_DEVICE_PIPE_MAX_PACKET_SIZE");
         test_assert_error(
@@ -458,9 +456,8 @@ int test_consistency_pipes(cl_device_id deviceID, cl_context context,
         // Devices that support pipes must also return CL_TRUE
         // for CL_DEVICE_GENERIC_ADDRESS_SPACE_SUPPORT.
         cl_bool b;
-        error =
-            clGetDeviceInfo(deviceID, CL_DEVICE_GENERIC_ADDRESS_SPACE_SUPPORT,
-                            sizeof(b), &b, NULL);
+        error = clGetDeviceInfo(device, CL_DEVICE_GENERIC_ADDRESS_SPACE_SUPPORT,
+                                sizeof(b), &b, NULL);
         test_error(error,
                    "Unable to query CL_DEVICE_GENERIC_ADDRESS_SPACE_SUPPORT");
         test_assert_error(
@@ -472,8 +469,7 @@ int test_consistency_pipes(cl_device_id deviceID, cl_context context,
     return TEST_PASS;
 }
 
-int test_consistency_progvar(cl_device_id deviceID, cl_context context,
-                             cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_progvar, Version(3, 0))
 {
     // clGetDeviceInfo, passing CL_DEVICE_MAX_GLOBAL_VARIABLE_SIZE
     // May return 0, indicating that device does not support Program Scope
@@ -484,7 +480,7 @@ int test_consistency_progvar(cl_device_id deviceID, cl_context context,
     clKernelWrapper kernel;
 
     size_t maxGlobalVariableSize = 0;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_MAX_GLOBAL_VARIABLE_SIZE,
+    error = clGetDeviceInfo(device, CL_DEVICE_MAX_GLOBAL_VARIABLE_SIZE,
                             sizeof(maxGlobalVariableSize),
                             &maxGlobalVariableSize, NULL);
     test_error(error, "Unable to query CL_DEVICE_MAX_GLOBAL_VARIABLE_SIZE");
@@ -503,7 +499,7 @@ int test_consistency_progvar(cl_device_id deviceID, cl_context context,
         // CL_DEVICE_GLOBAL_VARIABLE_PREFERRED_TOTAL_SIZE
         // Returns 0 if device does not support Program Scope Global Variables.
 
-        error = clGetDeviceInfo(deviceID,
+        error = clGetDeviceInfo(device,
                                 CL_DEVICE_GLOBAL_VARIABLE_PREFERRED_TOTAL_SIZE,
                                 sizeof(sz), &sz, NULL);
         test_error(
@@ -520,7 +516,7 @@ int test_consistency_progvar(cl_device_id deviceID, cl_context context,
         // Returns 0 if device does not support Program Scope Global Variables.
 
         error = clGetProgramBuildInfo(
-            program, deviceID, CL_PROGRAM_BUILD_GLOBAL_VARIABLE_TOTAL_SIZE,
+            program, device, CL_PROGRAM_BUILD_GLOBAL_VARIABLE_TOTAL_SIZE,
             sizeof(sz), &sz, NULL);
         test_error(
             error,
@@ -534,10 +530,7 @@ int test_consistency_progvar(cl_device_id deviceID, cl_context context,
     return TEST_PASS;
 }
 
-int test_consistency_non_uniform_work_group(cl_device_id deviceID,
-                                            cl_context context,
-                                            cl_command_queue queue,
-                                            int num_elements)
+REGISTER_TEST_VERSION(consistency_non_uniform_work_group, Version(3, 0))
 {
     // clGetDeviceInfo, passing CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT:
     // May return CL_FALSE, indicating that device does not support Non-Uniform
@@ -550,7 +543,7 @@ int test_consistency_non_uniform_work_group(cl_device_id deviceID,
     clKernelWrapper kernel;
 
     cl_bool nonUniformWorkGroupSupport = CL_FALSE;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT,
+    error = clGetDeviceInfo(device, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT,
                             sizeof(nonUniformWorkGroupSupport),
                             &nonUniformWorkGroupSupport, NULL);
     test_error(error,
@@ -617,9 +610,7 @@ int test_consistency_non_uniform_work_group(cl_device_id deviceID,
     return TEST_PASS;
 }
 
-int test_consistency_read_write_images(cl_device_id deviceID,
-                                       cl_context context,
-                                       cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_read_write_images, Version(3, 0))
 {
     // clGetDeviceInfo, passing
     // CL_DEVICE_MAX_READ_WRITE_IMAGE_ARGS May return 0,
@@ -627,15 +618,14 @@ int test_consistency_read_write_images(cl_device_id deviceID,
     cl_int error;
 
     cl_uint maxReadWriteImageArgs = 0;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_MAX_READ_WRITE_IMAGE_ARGS,
+    error = clGetDeviceInfo(device, CL_DEVICE_MAX_READ_WRITE_IMAGE_ARGS,
                             sizeof(maxReadWriteImageArgs),
                             &maxReadWriteImageArgs, NULL);
     test_error(error,
                "Unable to query "
                "CL_DEVICE_MAX_READ_WRITE_IMAGE_ARGS");
 
-    // clGetSupportedImageFormats, passing
-    // CL_MEM_KERNEL_READ_AND_WRITE
+    // clGetSupportedImageFormats, passing CL_MEM_KERNEL_READ_AND_WRITE
     // Returns an empty set (such as num_image_formats equal to 0), indicating
     // that no image formats are supported for reading and writing in the same
     // kernel, if no devices in context support Read-Write Images.
@@ -647,7 +637,7 @@ int test_consistency_read_write_images(cl_device_id deviceID,
         CL_MEM_OBJECT_IMAGE2D,       CL_MEM_OBJECT_IMAGE3D,
         CL_MEM_OBJECT_IMAGE1D_ARRAY, CL_MEM_OBJECT_IMAGE2D_ARRAY,
     };
-    for (int i = 0; i < ARRAY_SIZE(image_types); i++)
+    for (size_t i = 0; i < ARRAY_SIZE(image_types); i++)
     {
         cl_uint numImageFormats = 0;
         error = clGetSupportedImageFormats(
@@ -680,10 +670,7 @@ int test_consistency_read_write_images(cl_device_id deviceID,
     return TEST_PASS;
 }
 
-int test_consistency_2d_image_from_buffer(cl_device_id deviceID,
-                                          cl_context context,
-                                          cl_command_queue queue,
-                                          int num_elements)
+REGISTER_TEST_VERSION(consistency_2d_image_from_buffer, Version(3, 0))
 {
     // clGetDeviceInfo, passing CL_DEVICE_IMAGE_PITCH_ALIGNMENT or
     // CL_DEVICE_IMAGE_BASE_ADDRESS_ALIGNMENT
@@ -700,7 +687,7 @@ int test_consistency_2d_image_from_buffer(cl_device_id deviceID,
     clMemWrapper image;
 
     cl_uint imagePitchAlignment = 0;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_IMAGE_PITCH_ALIGNMENT,
+    error = clGetDeviceInfo(device, CL_DEVICE_IMAGE_PITCH_ALIGNMENT,
                             sizeof(imagePitchAlignment), &imagePitchAlignment,
                             NULL);
     test_error(error,
@@ -708,7 +695,7 @@ int test_consistency_2d_image_from_buffer(cl_device_id deviceID,
                "CL_DEVICE_IMAGE_PITCH_ALIGNMENT");
 
     cl_uint imageBaseAddressAlignment = 0;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_IMAGE_BASE_ADDRESS_ALIGNMENT,
+    error = clGetDeviceInfo(device, CL_DEVICE_IMAGE_BASE_ADDRESS_ALIGNMENT,
                             sizeof(imageBaseAddressAlignment),
                             &imageBaseAddressAlignment, NULL);
     test_error(error,
@@ -716,7 +703,7 @@ int test_consistency_2d_image_from_buffer(cl_device_id deviceID,
                "CL_DEVICE_IMAGE_BASE_ADDRESS_ALIGNMENT");
 
     bool supports_cl_khr_image2d_from_buffer =
-        is_extension_available(deviceID, "cl_khr_image2d_from_buffer");
+        is_extension_available(device, "cl_khr_image2d_from_buffer");
 
     if (imagePitchAlignment == 0 || imageBaseAddressAlignment == 0)
     {
@@ -787,8 +774,7 @@ int test_consistency_2d_image_from_buffer(cl_device_id deviceID,
 // All of the sRGB Image Channel Orders (such as CL_​sRGBA) are optional for
 // devices supporting OpenCL 3.0.
 
-int test_consistency_depth_images(cl_device_id deviceID, cl_context context,
-                                  cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_depth_images, Version(3, 0))
 {
     // The CL_DEPTH Image Channel Order is optional for devices supporting
     // OpenCL 3.0.
@@ -801,7 +787,7 @@ int test_consistency_depth_images(cl_device_id deviceID, cl_context context,
         CL_MEM_READ_WRITE,
         CL_MEM_KERNEL_READ_AND_WRITE,
     };
-    for (int i = 0; i < ARRAY_SIZE(mem_flags); i++)
+    for (size_t i = 0; i < ARRAY_SIZE(mem_flags); i++)
     {
         cl_uint numImageFormats = 0;
         error = clGetSupportedImageFormats(context, mem_flags[i],
@@ -827,7 +813,7 @@ int test_consistency_depth_images(cl_device_id deviceID, cl_context context,
     }
 
     bool supports_cl_khr_depth_images =
-        is_extension_available(deviceID, "cl_khr_depth_images");
+        is_extension_available(device, "cl_khr_depth_images");
 
     if (totalDepthImageFormats == 0)
     {
@@ -845,10 +831,7 @@ int test_consistency_depth_images(cl_device_id deviceID, cl_context context,
     return TEST_PASS;
 }
 
-int test_consistency_device_and_host_timer(cl_device_id deviceID,
-                                           cl_context context,
-                                           cl_command_queue queue,
-                                           int num_elements)
+REGISTER_TEST_VERSION(consistency_device_and_host_timer, Version(3, 0))
 {
     // clGetPlatformInfo, passing CL_PLATFORM_HOST_TIMER_RESOLUTION
     // May return 0, indicating that platform does not support Device and Host
@@ -856,7 +839,7 @@ int test_consistency_device_and_host_timer(cl_device_id deviceID,
     cl_int error;
 
     cl_platform_id platform = NULL;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_PLATFORM, sizeof(platform),
+    error = clGetDeviceInfo(device, CL_DEVICE_PLATFORM, sizeof(platform),
                             &platform, NULL);
     test_error(error, "Unable to query CL_DEVICE_PLATFORM");
 
@@ -875,13 +858,13 @@ int test_consistency_device_and_host_timer(cl_device_id deviceID,
         cl_ulong dt = 0;
         cl_ulong ht = 0;
 
-        error = clGetDeviceAndHostTimer(deviceID, &dt, &ht);
+        error = clGetDeviceAndHostTimer(device, &dt, &ht);
         test_failure_error(
             error, CL_INVALID_OPERATION,
             "CL_PLATFORM_HOST_TIMER_RESOLUTION returned 0 but "
             "clGetDeviceAndHostTimer did not return CL_INVALID_OPERATION");
 
-        error = clGetHostTimer(deviceID, &ht);
+        error = clGetHostTimer(device, &ht);
         test_failure_error(
             error, CL_INVALID_OPERATION,
             "CL_PLATFORM_HOST_TIMER_RESOLUTION returned 0 but "
@@ -891,8 +874,7 @@ int test_consistency_device_and_host_timer(cl_device_id deviceID,
     return TEST_PASS;
 }
 
-int test_consistency_il_programs(cl_device_id deviceID, cl_context context,
-                                 cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_il_programs, Version(3, 0))
 {
     // clGetDeviceInfo, passing CL_DEVICE_IL_VERSION or
     // CL_DEVICE_ILS_WITH_VERSION
@@ -906,14 +888,14 @@ int test_consistency_il_programs(cl_device_id deviceID, cl_context context,
     // Even if the device does not support Intermediate Language Programs the
     // size of the string query should not be zero.
     size_t sz = SIZE_MAX;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_IL_VERSION, 0, NULL, &sz);
+    error = clGetDeviceInfo(device, CL_DEVICE_IL_VERSION, 0, NULL, &sz);
     test_error(error, "Unable to query CL_DEVICE_IL_VERSION");
     test_assert_error(sz != 0,
                       "CL_DEVICE_IL_VERSION should return a non-zero size");
 
-    std::string ilVersion = get_device_il_version_string(deviceID);
+    std::string ilVersion = get_device_il_version_string(device);
 
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_ILS_WITH_VERSION, 0, NULL, &sz);
+    error = clGetDeviceInfo(device, CL_DEVICE_ILS_WITH_VERSION, 0, NULL, &sz);
     test_error(error, "Unable to query CL_DEVICE_ILS_WITH_VERSION");
 
     if (ilVersion == "" || sz == 0)
@@ -932,13 +914,12 @@ int test_consistency_il_programs(cl_device_id deviceID, cl_context context,
                           "but CL_DEVICE_IL_VERSION returned an empty string");
 
         bool supports_cl_khr_il_program =
-            is_extension_available(deviceID, "cl_khr_il_program");
+            is_extension_available(device, "cl_khr_il_program");
         test_assert_error(supports_cl_khr_il_program == false,
                           "Device does not support IL Programs but does "
                           "support cl_khr_il_program");
 
         // Test setup:
-
         error = create_single_kernel_helper(context, &program, &kernel, 1,
                                             &test_kernel, "test");
         test_error(error, "Unable to create test kernel");
@@ -982,8 +963,107 @@ int test_consistency_il_programs(cl_device_id deviceID, cl_context context,
     return TEST_PASS;
 }
 
-int test_consistency_subgroups(cl_device_id deviceID, cl_context context,
-                               cl_command_queue queue, int num_elements)
+REGISTER_TEST(consistency_missing_compiler)
+{
+    cl_bool compilerAvail = CL_TRUE;
+    cl_int err =
+        clGetDeviceInfo(device, CL_DEVICE_COMPILER_AVAILABLE,
+                        sizeof(compilerAvail), &compilerAvail, nullptr);
+    test_error_fail(err, "clGetDeviceInfo failed");
+
+    if (compilerAvail)
+    {
+        log_info("Can't perform compiler consistency check\n");
+        return TEST_SKIPPED_ITSELF;
+    }
+
+    const char* sample_kernel = R"(
+        __kernel void sample_test_C(__global float *src, __global int *dst)
+        {
+            size_t tid = get_global_id(0);
+            dst[tid] = (int)src[tid];
+        }
+    )";
+
+    clProgramWrapper program =
+        clCreateProgramWithSource(context, 1, &sample_kernel, nullptr, &err);
+    test_error(err, "Unable to create reference program");
+
+    /* clCompileProgram consistency check */
+    err = clCompileProgram(program, 1, &device, nullptr, 0, nullptr, nullptr,
+                           nullptr, nullptr);
+    test_failure_error_ret(err, CL_COMPILER_NOT_AVAILABLE,
+                           "clCompileProgram should return "
+                           "CL_COMPILER_NOT_AVAILABLE",
+                           TEST_FAIL);
+
+    /* clBuildProgram consistency check */
+    err = clBuildProgram(program, 1, &device, NULL, NULL, NULL);
+    test_failure_error_ret(err, CL_COMPILER_NOT_AVAILABLE,
+                           "clBuildProgram should return "
+                           "CL_COMPILER_NOT_AVAILABLE",
+                           TEST_FAIL);
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(consistency_missing_linker)
+{
+    cl_bool linkerAvail = CL_TRUE;
+    cl_int err = clGetDeviceInfo(device, CL_DEVICE_LINKER_AVAILABLE,
+                                 sizeof(linkerAvail), &linkerAvail, nullptr);
+    test_error_fail(err, "clGetDeviceInfo failed");
+
+    if (linkerAvail)
+    {
+        log_info("Can't perform linker consistency check\n");
+        return TEST_SKIPPED_ITSELF;
+    }
+
+    if (!gIsEmbedded)
+    {
+        log_error("CL_DEVICE_LINKER_AVAILABLE must be CL_TRUE for devices "
+                  "supporting the full profile.\n");
+        return TEST_FAIL;
+    }
+
+    cl_bool compilerAvail = CL_TRUE;
+    err = clGetDeviceInfo(device, CL_DEVICE_COMPILER_AVAILABLE,
+                          sizeof(compilerAvail), &compilerAvail, nullptr);
+    test_error_fail(err, "clGetDeviceInfo failed");
+
+    if (compilerAvail)
+    {
+        log_error("CL_DEVICE_LINKER_AVAILABLE must be CL_TRUE if "
+                  "CL_DEVICE_COMPILER_AVAILABLE is CL_TRUE.\n");
+        return TEST_FAIL;
+    }
+
+    const char* sample_kernel = R"(
+        __kernel void sample_test_C(__global float *src, __global int *dst)
+        {
+            size_t tid = get_global_id(0);
+            dst[tid] = (int)src[tid];
+        }
+    )";
+
+    clProgramWrapper program =
+        clCreateProgramWithSource(context, 1, &sample_kernel, nullptr, &err);
+    test_error(err, "Unable to create reference program");
+
+    clProgramWrapper linked =
+        clLinkProgram(context, 1, &device, "", 1, &program, 0, 0, &err);
+    if (err != CL_LINKER_NOT_AVAILABLE && err != CL_INVALID_OPERATION)
+    {
+        log_error("clLinkProgram should return CL_LINKER_NOT_AVAILABLE or "
+                  "CL_INVALID_OPERATION\n");
+        return TEST_FAIL;
+    }
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST_VERSION(consistency_subgroups, Version(3, 0))
 {
     // clGetDeviceInfo, passing CL_DEVICE_MAX_NUM_SUB_GROUPS
     // May return 0, indicating that device does not support Subgroups.
@@ -993,7 +1073,7 @@ int test_consistency_subgroups(cl_device_id deviceID, cl_context context,
     clKernelWrapper kernel;
 
     cl_uint maxNumSubGroups = 0;
-    error = clGetDeviceInfo(deviceID, CL_DEVICE_MAX_NUM_SUB_GROUPS,
+    error = clGetDeviceInfo(device, CL_DEVICE_MAX_NUM_SUB_GROUPS,
                             sizeof(maxNumSubGroups), &maxNumSubGroups, NULL);
     test_error(error, "Unable to query CL_DEVICE_MAX_NUM_SUB_GROUPS");
 
@@ -1011,7 +1091,7 @@ int test_consistency_subgroups(cl_device_id deviceID, cl_context context,
 
         cl_bool ifp = CL_FALSE;
         error = clGetDeviceInfo(
-            deviceID, CL_DEVICE_SUB_GROUP_INDEPENDENT_FORWARD_PROGRESS,
+            device, CL_DEVICE_SUB_GROUP_INDEPENDENT_FORWARD_PROGRESS,
             sizeof(ifp), &ifp, NULL);
         test_error(
             error,
@@ -1026,7 +1106,7 @@ int test_consistency_subgroups(cl_device_id deviceID, cl_context context,
         // device does not support Subgroups.
 
         bool supports_cl_khr_subgroups =
-            is_extension_available(deviceID, "cl_khr_subgroups");
+            is_extension_available(device, "cl_khr_subgroups");
         test_assert_error(supports_cl_khr_subgroups == false,
                           "Device does not support Subgroups but does "
                           "support cl_khr_subgroups");
@@ -1035,7 +1115,7 @@ int test_consistency_subgroups(cl_device_id deviceID, cl_context context,
         // Returns CL_INVALID_OPERATION if device does not support Subgroups.
 
         size_t sz = SIZE_MAX;
-        error = clGetKernelSubGroupInfo(kernel, deviceID,
+        error = clGetKernelSubGroupInfo(kernel, device,
                                         CL_KERNEL_MAX_NUM_SUB_GROUPS, 0, NULL,
                                         sizeof(sz), &sz, NULL);
         test_failure_error(
@@ -1049,8 +1129,7 @@ int test_consistency_subgroups(cl_device_id deviceID, cl_context context,
 
 static void CL_CALLBACK program_callback(cl_program, void*) {}
 
-int test_consistency_prog_ctor_dtor(cl_device_id deviceID, cl_context context,
-                                    cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_prog_ctor_dtor, Version(3, 0))
 {
     cl_int error;
 
@@ -1096,8 +1175,7 @@ int test_consistency_prog_ctor_dtor(cl_device_id deviceID, cl_context context,
     return TEST_PASS;
 }
 
-int test_consistency_3d_image_writes(cl_device_id deviceID, cl_context context,
-                                     cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(consistency_3d_image_writes, Version(3, 0))
 {
     // clGetSupportedImageFormats, passing CL_MEM_OBJECT_IMAGE3D and one of
     // CL_MEM_WRITE_ONLY, CL_MEM_READ_WRITE, or CL_MEM_KERNEL_READ_AND_WRITE
@@ -1114,7 +1192,7 @@ int test_consistency_3d_image_writes(cl_device_id deviceID, cl_context context,
         CL_MEM_READ_WRITE,
         CL_MEM_KERNEL_READ_AND_WRITE,
     };
-    for (int i = 0; i < ARRAY_SIZE(mem_flags); i++)
+    for (size_t i = 0; i < ARRAY_SIZE(mem_flags); i++)
     {
         cl_uint numImageFormats = 0;
         error = clGetSupportedImageFormats(context, mem_flags[i],
@@ -1128,7 +1206,7 @@ int test_consistency_3d_image_writes(cl_device_id deviceID, cl_context context,
     }
 
     bool supports_cl_khr_3d_image_writes =
-        is_extension_available(deviceID, "cl_khr_3d_image_writes");
+        is_extension_available(device, "cl_khr_3d_image_writes");
 
     if (total3DImageWriteFormats == 0)
     {
@@ -1144,6 +1222,140 @@ int test_consistency_3d_image_writes(cl_device_id deviceID, cl_context context,
         test_assert_error(supports_cl_khr_3d_image_writes,
                           "Device supports Writing to 3D Image Objects but "
                           "does not support cl_khr_3d_image_writes");
+    }
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(consistency_requirements_fp64)
+{
+    cl_int error = CL_SUCCESS;
+    cl_device_fp_config value = 0;
+
+    if (is_extension_available(device, "cl_khr_fp64"))
+    {
+        const Version version = get_device_cl_version(device);
+
+        error = clGetDeviceInfo(device, CL_DEVICE_DOUBLE_FP_CONFIG,
+                                sizeof(value), &value, nullptr);
+        test_error(error, "Unable to get device CL_DEVICE_DOUBLE_FP_CONFIG");
+        test_assert_error(
+            value > 0, "CL_DEVICE_DOUBLE_FP_CONFIG must return nonzero value");
+        if (version < Version(2, 0))
+        {
+            test_assert_error(
+                value
+                    & (CL_FP_FMA | CL_FP_ROUND_TO_NEAREST | CL_FP_ROUND_TO_ZERO
+                       | CL_FP_ROUND_TO_INF | CL_FP_INF_NAN | CL_FP_DENORM),
+                "Reported double fp config doesn't meet minimum set "
+                "for OpenCL 1.0, OpenCL 1.1, OpenCL 1.2 devices");
+        }
+        else
+        {
+            test_assert_error(
+                value
+                    & (CL_FP_FMA | CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN
+                       | CL_FP_DENORM),
+                "Reported double fp config doesn't meet minimum set "
+                "for OpenCL 2.0 or newer devices");
+        }
+
+        error = clGetDeviceInfo(device, CL_DEVICE_PREFERRED_VECTOR_WIDTH_DOUBLE,
+                                sizeof(value), &value, nullptr);
+        test_error(
+            error,
+            "Unable to get device CL_DEVICE_PREFERRED_VECTOR_WIDTH_DOUBLE");
+        test_assert_error(value > 0,
+                          "CL_DEVICE_PREFERRED_VECTOR_WIDTH_DOUBLE must return "
+                          "nonzero value");
+
+        error = clGetDeviceInfo(device, CL_DEVICE_NATIVE_VECTOR_WIDTH_DOUBLE,
+                                sizeof(value), &value, nullptr);
+        test_error(error,
+                   "Unable to get device CL_DEVICE_NATIVE_VECTOR_WIDTH_DOUBLE");
+        test_assert_error(
+            value > 0,
+            "CL_DEVICE_NATIVE_VECTOR_WIDTH_DOUBLE must return nonzero value");
+    }
+    else
+    {
+        error = clGetDeviceInfo(device, CL_DEVICE_DOUBLE_FP_CONFIG,
+                                sizeof(value), &value, nullptr);
+        test_error(error, "Unable to get device CL_DEVICE_DOUBLE_FP_CONFIG");
+        test_assert_error(value == 0,
+                          "CL_DEVICE_DOUBLE_FP_CONFIG must return 0");
+
+        error = clGetDeviceInfo(device, CL_DEVICE_PREFERRED_VECTOR_WIDTH_DOUBLE,
+                                sizeof(value), &value, nullptr);
+        test_error(
+            error,
+            "Unable to get device CL_DEVICE_PREFERRED_VECTOR_WIDTH_DOUBLE");
+        test_assert_error(
+            value == 0,
+            "CL_DEVICE_PREFERRED_VECTOR_WIDTH_DOUBLE must return 0");
+
+        error = clGetDeviceInfo(device, CL_DEVICE_NATIVE_VECTOR_WIDTH_DOUBLE,
+                                sizeof(value), &value, nullptr);
+        test_error(error,
+                   "Unable to get device CL_DEVICE_NATIVE_VECTOR_WIDTH_DOUBLE");
+        test_assert_error(value == 0,
+                          "CL_DEVICE_NATIVE_VECTOR_WIDTH_DOUBLE must return 0");
+    }
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(consistency_requirements_fp16)
+{
+    cl_int error = CL_SUCCESS;
+    cl_device_fp_config value = 0;
+
+    if (is_extension_available(device, "cl_khr_fp16"))
+    {
+        error = clGetDeviceInfo(device, CL_DEVICE_HALF_FP_CONFIG, sizeof(value),
+                                &value, nullptr);
+        test_error(error, "Unable to get device CL_DEVICE_HALF_FP_CONFIG");
+        test_assert_error(value > 0,
+                          "CL_DEVICE_HALF_FP_CONFIG must return nonzero value");
+
+        test_assert_error((value & (CL_FP_ROUND_TO_NEAREST | CL_FP_INF_NAN))
+                              || (value & CL_FP_ROUND_TO_ZERO),
+                          "Reported half fp config doesn't meet minimum set");
+
+        error = clGetDeviceInfo(device, CL_DEVICE_PREFERRED_VECTOR_WIDTH_HALF,
+                                sizeof(value), &value, nullptr);
+        test_error(
+            error,
+            "Unable to get device CL_DEVICE_PREFERRED_VECTOR_WIDTH_HALF");
+        test_assert_error(value > 0,
+                          "CL_DEVICE_PREFERRED_VECTOR_WIDTH_HALF must return "
+                          "nonzero value");
+
+        error = clGetDeviceInfo(device, CL_DEVICE_NATIVE_VECTOR_WIDTH_HALF,
+                                sizeof(value), &value, nullptr);
+        test_error(error,
+                   "Unable to get device CL_DEVICE_NATIVE_VECTOR_WIDTH_HALF");
+        test_assert_error(
+            value > 0,
+            "CL_DEVICE_NATIVE_VECTOR_WIDTH_HALF must return nonzero value");
+    }
+    else
+    {
+        error = clGetDeviceInfo(device, CL_DEVICE_PREFERRED_VECTOR_WIDTH_HALF,
+                                sizeof(value), &value, nullptr);
+        test_error(
+            error,
+            "Unable to get device CL_DEVICE_PREFERRED_VECTOR_WIDTH_HALF");
+        test_assert_error(value == 0,
+                          "CL_DEVICE_PREFERRED_VECTOR_WIDTH_HALF must return "
+                          "0");
+
+        error = clGetDeviceInfo(device, CL_DEVICE_NATIVE_VECTOR_WIDTH_HALF,
+                                sizeof(value), &value, nullptr);
+        test_error(error,
+                   "Unable to get device CL_DEVICE_NATIVE_VECTOR_WIDTH_HALF");
+        test_assert_error(value == 0,
+                          "CL_DEVICE_NATIVE_VECTOR_WIDTH_HALF must return 0");
     }
 
     return TEST_PASS;

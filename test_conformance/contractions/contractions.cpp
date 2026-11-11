@@ -1,6 +1,6 @@
 //
 // Copyright (c) 2017 The Khronos Group Inc.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -36,7 +36,6 @@
 #include "harness/rounding_mode.h"
 #include "harness/fpcontrol.h"
 #include "harness/testHarness.h"
-#include "harness/parseParameters.h"
 #if defined( __APPLE__ )
 #include <sys/sysctl.h>
 #endif
@@ -65,7 +64,6 @@ __thread fpu_control_t fpu_control = 0;
 #define MAXPATHLEN  2048
 #endif
 
-char                appName[ MAXPATHLEN ] = "";
 cl_context          gContext = NULL;
 cl_command_queue    gQueue = NULL;
 cl_program          gProgram[5] = { NULL, NULL, NULL, NULL, NULL };
@@ -92,14 +90,12 @@ int                     *skipTest[8];
 double              *buf3_double, *buf4_double, *buf5_double, *buf6_double;
 double              *correct_double[8];
 
-static const char   **gArgList;
-static size_t       gArgCount;
-
 #define BUFFER_SIZE         (1024*1024)
 
 
-static int ParseArgs( int argc, const char **argv );
-static void PrintUsage( void );
+static test_status ParseArgs(int &argc, const char *argv[],
+                             std::vector<std::string> &removed_args,
+                             std::string &help);
 test_status InitCL( cl_device_id device );
 static void ReleaseCL( void );
 static int RunTest( int testNumber );
@@ -191,7 +187,7 @@ double sse_mul_sd(double x, double y)
 }
 #endif
 
-#ifdef __PPC__
+#if defined(__PPC__) || defined(__riscv)
 float ppc_mul(float a, float b)
 {
     float p;
@@ -218,121 +214,43 @@ float ppc_mul(float a, float b)
 }
 #endif
 
-int test_contractions_float_0(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest(0);
-}
+REGISTER_TEST(contractions_float_0) { return RunTest(0); }
 
-int test_contractions_float_1(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest(1);
-}
+REGISTER_TEST(contractions_float_1) { return RunTest(1); }
 
-int test_contractions_float_2(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest(2);
-}
+REGISTER_TEST(contractions_float_2) { return RunTest(2); }
 
-int test_contractions_float_3(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest(3);
-}
+REGISTER_TEST(contractions_float_3) { return RunTest(3); }
 
-int test_contractions_float_4(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest(4);
-}
+REGISTER_TEST(contractions_float_4) { return RunTest(4); }
 
-int test_contractions_float_5(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest(5);
-}
+REGISTER_TEST(contractions_float_5) { return RunTest(5); }
 
-int test_contractions_float_6(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest(6);
-}
+REGISTER_TEST(contractions_float_6) { return RunTest(6); }
 
-int test_contractions_float_7(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest(7);
-}
+REGISTER_TEST(contractions_float_7) { return RunTest(7); }
 
-int test_contractions_double_0(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest_Double(0);
-}
+REGISTER_TEST(contractions_double_0) { return RunTest_Double(0); }
 
-int test_contractions_double_1(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest_Double(1);
-}
+REGISTER_TEST(contractions_double_1) { return RunTest_Double(1); }
 
-int test_contractions_double_2(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest_Double(2);
-}
+REGISTER_TEST(contractions_double_2) { return RunTest_Double(2); }
 
-int test_contractions_double_3(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest_Double(3);
-}
+REGISTER_TEST(contractions_double_3) { return RunTest_Double(3); }
 
-int test_contractions_double_4(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest_Double(4);
-}
+REGISTER_TEST(contractions_double_4) { return RunTest_Double(4); }
 
-int test_contractions_double_5(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest_Double(5);
-}
+REGISTER_TEST(contractions_double_5) { return RunTest_Double(5); }
 
-int test_contractions_double_6(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest_Double(6);
-}
+REGISTER_TEST(contractions_double_6) { return RunTest_Double(6); }
 
-int test_contractions_double_7(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
-{
-    return RunTest_Double(7);
-}
-
-test_definition test_list[] = {
-    ADD_TEST( contractions_float_0 ),
-    ADD_TEST( contractions_float_1 ),
-    ADD_TEST( contractions_float_2 ),
-    ADD_TEST( contractions_float_3 ),
-    ADD_TEST( contractions_float_4 ),
-    ADD_TEST( contractions_float_5 ),
-    ADD_TEST( contractions_float_6 ),
-    ADD_TEST( contractions_float_7 ),
-    ADD_TEST( contractions_double_0 ),
-    ADD_TEST( contractions_double_1 ),
-    ADD_TEST( contractions_double_2 ),
-    ADD_TEST( contractions_double_3 ),
-    ADD_TEST( contractions_double_4 ),
-    ADD_TEST( contractions_double_5 ),
-    ADD_TEST( contractions_double_6 ),
-    ADD_TEST( contractions_double_7 ),
-};
-
-const int test_num = ARRAY_SIZE( test_list );
+REGISTER_TEST(contractions_double_7) { return RunTest_Double(7); }
 
 int main( int argc, const char **argv )
 {
-    argc = parseCustomParam(argc, argv);
-    if (argc == -1)
-    {
-        return -1;
-    }
-
-    int error = ParseArgs( argc, argv );
-
-    if( !error )
-    {
-        error = runTestHarnessWithCheck( gArgCount, gArgList, test_num, test_list, true, 0, InitCL );
-    }
+    int error = runTestHarnessWithCheckAndParse(
+        argc, argv, test_registry::getInstance().num_tests(),
+        test_registry::getInstance().definitions(), true, 0, InitCL, ParseArgs);
 
     if( gQueue )
     {
@@ -342,54 +260,25 @@ int main( int argc, const char **argv )
     }
 
     ReleaseCL();
-    free( gArgList );
 
     return error;
 }
 
 
-
-static int ParseArgs( int argc, const char **argv )
+static test_status ParseArgs(int &argc, const char *argv[],
+                             std::vector<std::string> &removed_args,
+                             std::string &help)
 {
-    gArgList = (const char **)calloc( argc, sizeof( char*) );
+    std::vector<const char *> argList;
+    argList.push_back(argv[0]);
 
-    if( NULL == gArgList )
-    {
-        vlog_error( "Failed to allocate memory for argList\n" );
-        return 1;
-    }
-
-    gArgList[0] = argv[0];
-    gArgCount = 1;
+    help =
+        R"(        -z       Toggle FTZ mode (Section 6.5.3) for all functions. (Set by
+                 device capabilities by default.)
+        -sNUMBER Set random seed.
+)";
 
     int length_of_seed = 0;
-
-    { // Extract the app name
-        strncpy( appName, argv[0], MAXPATHLEN );
-
-#if (defined( __APPLE__ ) || defined(__linux__) || defined(__MINGW32__))
-        char baseName[MAXPATHLEN];
-        char *base = NULL;
-        strncpy( baseName, argv[0], MAXPATHLEN );
-        base = basename( baseName );
-        if( NULL != base )
-        {
-            strncpy( appName, base, sizeof( appName )  );
-            appName[ sizeof( appName ) -1 ] = '\0';
-        }
-#elif defined (_WIN32)
-        char fname[_MAX_FNAME + _MAX_EXT + 1];
-        char ext[_MAX_EXT];
-
-        errno_t err = _splitpath_s( argv[0], NULL, 0, NULL, 0,
-                                   fname, _MAX_FNAME, ext, _MAX_EXT );
-        if (err == 0) { // no error
-            strcat (fname, ext); //just cat them, size of frame can keep both
-            strncpy (appName, fname, sizeof(appName));
-            appName[ sizeof( appName ) -1 ] = '\0';
-        }
-#endif
-    }
 
     for( int i = 1; i < argc; i++ )
     {
@@ -404,10 +293,6 @@ static int ParseArgs( int argc, const char **argv )
                 arg++;
                 switch( *arg )
                 {
-                    case 'h':
-                        PrintUsage();
-                        return -1;
-
                     case 's':
                         arg++;
                         gSeed = atoi( arg );
@@ -423,36 +308,21 @@ static int ParseArgs( int argc, const char **argv )
 
                     default:
                         vlog( " <-- unknown flag: %c (0x%2.2x)\n)", *arg, *arg );
-                        PrintUsage();
-                        return -1;
+                        return TEST_FAIL;
                 }
             }
+            removed_args.push_back(argv[i]);
         }
         else
         {
-            gArgList[gArgCount] = arg;
-            gArgCount++;
+            argList.push_back(argv[i]);
         }
     }
-    vlog( "\n\nTest binary built %s %s\n", __DATE__, __TIME__ );
+    update_argc_argv_from_args_list(argList, argc, argv);
 
     PrintArch();
 
-    return 0;
-}
-
-static void PrintUsage( void )
-{
-    vlog( "%s [-z]: <optional: test names>\n", appName );
-    vlog( "\tOptions:\n" );
-    vlog( "\t\t-z\tToggle FTZ mode (Section 6.5.3) for all functions. (Set by device capabilities by default.)\n" );
-    vlog( "\t\t-sNUMBER set random seed.\n");
-    vlog( "\n" );
-    vlog( "\tTest names:\n" );
-    for( int i = 0; i < test_num; i++ )
-    {
-        vlog( "\t\t%s\n", test_list[i].name );
-    }
+    return TEST_PASS;
 }
 
 const char *sizeNames[] = { "float", "float2", "float4", "float8", "float16" };
@@ -691,9 +561,11 @@ test_status InitCL( cl_device_id device )
             // turn that off
             f3[i] = sse_mul(q, q2);
             f4[i] = sse_mul(-q, q2);
-#elif defined(__PPC__)
-            // None of the current generation PPC processors support HW
-            // FTZ, emulate it in sw.
+#elif (defined(__PPC__) || defined(__riscv))
+            // RISC-V CPUs with default 'f' fp32 extension do not support
+            // enabling/disabling FTZ mode, subnormals are always handled
+            // without FTZ. None of the current generation PPC processors
+            // support HW FTZ, emulate it in sw.
             f3[i] = ppc_mul(q, q2);
             f4[i] = ppc_mul(-q, q2);
 #else
@@ -782,9 +654,10 @@ test_status InitCL( cl_device_id device )
                 skipTest[j][i] = (bufSkip[i] ||
                                   (gSkipNanInf && (FE_OVERFLOW == (FE_OVERFLOW & fetestexcept(FE_OVERFLOW)))));
 
-#if defined(__PPC__)
-                // Since the current Power processors don't emulate flush to zero in HW,
-                // it must be emulated in SW instead.
+#if defined(__PPC__) || defined(__riscv)
+                // Since the current Power processors don't emulate flush to
+                // zero in HW, it must be emulated in SW instead. (same for
+                // RISC-V CPUs with 'f' extension)
                 if (gForceFTZ)
                 {
                     if ((fabsf(correct[j][i]) < FLT_MIN) && (correct[j][i] != 0.0f))
@@ -820,7 +693,6 @@ test_status InitCL( cl_device_id device )
                     return TEST_FAIL;
                 }
             }
-
 
             double *f  = (double*) buf1;
             double *f2 = (double*) buf2;
@@ -977,7 +849,7 @@ static int RunTest( int testNumber )
         for( i = 0; i < sizeof(args ) / sizeof( args[0]); i++ )
             if( (error = clSetKernelArg(k, i, sizeof( cl_mem ), args + i) ))
             {
-                vlog_error( "Error %d setting kernel arg # %ld\n", error, i );
+                vlog_error("Error %d setting kernel arg # %zu\n", error, i);
                 return error;
             }
 
@@ -1022,24 +894,72 @@ static int RunTest( int testNumber )
                 switch( testNumber )
                 {
                         // Zeros for these should be positive
-                    case 0:     vlog_error( "%ld) Error for %s %s: %a * %a + %a =  *%a vs. %a\n", i, sizeNames[ vectorSize], kernelName[ testNumber ],
-                                           a[i], b[i], c[i], correct[testNumber][i], test[i] );       clReleaseKernel(k); return -1;
-                    case 1:     vlog_error( "%ld) Error for %s %s: %a * %a - %a =  *%a vs. %a\n", i, sizeNames[ vectorSize], kernelName[ testNumber ],
-                                           a[i], b[i], c[i], correct[testNumber][i], test[i] );       clReleaseKernel(k); return -1;
-                    case 2:     vlog_error( "%ld) Error for %s %s: %a + %a * %a =  *%a vs. %a\n", i, sizeNames[ vectorSize], kernelName[ testNumber ],
-                                           c[i], a[i], b[i], correct[testNumber][i], test[i] );       clReleaseKernel(k); return -1;
-                    case 3:     vlog_error( "%ld) Error for %s %s: %a - %a * %a =  *%a vs. %a\n", i, sizeNames[ vectorSize], kernelName[ testNumber ],
-                                           c[i], a[i], b[i], correct[testNumber][i], test[i] );       clReleaseKernel(k); return -1;
+                    case 0:
+                        vlog_error("%zu) Error for %s %s: %a * %a + %a =  *%a "
+                                   "vs. %a\n",
+                                   i, sizeNames[vectorSize],
+                                   kernelName[testNumber], a[i], b[i], c[i],
+                                   correct[testNumber][i], test[i]);
+                        clReleaseKernel(k);
+                        return -1;
+                    case 1:
+                        vlog_error("%zu) Error for %s %s: %a * %a - %a =  *%a "
+                                   "vs. %a\n",
+                                   i, sizeNames[vectorSize],
+                                   kernelName[testNumber], a[i], b[i], c[i],
+                                   correct[testNumber][i], test[i]);
+                        clReleaseKernel(k);
+                        return -1;
+                    case 2:
+                        vlog_error("%zu) Error for %s %s: %a + %a * %a =  *%a "
+                                   "vs. %a\n",
+                                   i, sizeNames[vectorSize],
+                                   kernelName[testNumber], c[i], a[i], b[i],
+                                   correct[testNumber][i], test[i]);
+                        clReleaseKernel(k);
+                        return -1;
+                    case 3:
+                        vlog_error("%zu) Error for %s %s: %a - %a * %a =  *%a "
+                                   "vs. %a\n",
+                                   i, sizeNames[vectorSize],
+                                   kernelName[testNumber], c[i], a[i], b[i],
+                                   correct[testNumber][i], test[i]);
+                        clReleaseKernel(k);
+                        return -1;
 
-                        // Zeros for these should be negative
-                    case 4:     vlog_error( "%ld) Error for %s %s: -(%a * %a + %a) =  *%a vs. %a\n", i, sizeNames[ vectorSize], kernelName[ testNumber ],
-                                           a[i], b[i], c[i], correct[testNumber][i], test[i] );       clReleaseKernel(k); return -1;
-                    case 5:     vlog_error( "%ld) Error for %s %s: -(%a * %a - %a) =  *%a vs. %a\n", i, sizeNames[ vectorSize], kernelName[ testNumber ],
-                                           a[i], b[i], c[i], correct[testNumber][i], test[i] );       clReleaseKernel(k); return -1;
-                    case 6:     vlog_error( "%ld) Error for %s %s: -(%a + %a * %a) =  *%a vs. %a\n", i, sizeNames[ vectorSize], kernelName[ testNumber ],
-                                           c[i], a[i], b[i], correct[testNumber][i], test[i] );       clReleaseKernel(k); return -1;
-                    case 7:     vlog_error( "%ld) Error for %s %s: -(%a - %a * %a) =  *%a vs. %a\n", i, sizeNames[ vectorSize], kernelName[ testNumber ],
-                                           c[i], a[i], b[i], correct[testNumber][i], test[i] );       clReleaseKernel(k); return -1;
+                        // Zeros for these shouzu be negative
+                    case 4:
+                        vlog_error("%zu) Error for %s %s: -(%a * %a + %a) =  "
+                                   "*%a vs. %a\n",
+                                   i, sizeNames[vectorSize],
+                                   kernelName[testNumber], a[i], b[i], c[i],
+                                   correct[testNumber][i], test[i]);
+                        clReleaseKernel(k);
+                        return -1;
+                    case 5:
+                        vlog_error("%zu) Error for %s %s: -(%a * %a - %a) =  "
+                                   "*%a vs. %a\n",
+                                   i, sizeNames[vectorSize],
+                                   kernelName[testNumber], a[i], b[i], c[i],
+                                   correct[testNumber][i], test[i]);
+                        clReleaseKernel(k);
+                        return -1;
+                    case 6:
+                        vlog_error("%zu) Error for %s %s: -(%a + %a * %a) =  "
+                                   "*%a vs. %a\n",
+                                   i, sizeNames[vectorSize],
+                                   kernelName[testNumber], c[i], a[i], b[i],
+                                   correct[testNumber][i], test[i]);
+                        clReleaseKernel(k);
+                        return -1;
+                    case 7:
+                        vlog_error("%zu) Error for %s %s: -(%a - %a * %a) =  "
+                                   "*%a vs. %a\n",
+                                   i, sizeNames[vectorSize],
+                                   kernelName[testNumber], c[i], a[i], b[i],
+                                   correct[testNumber][i], test[i]);
+                        clReleaseKernel(k);
+                        return -1;
                     default:
                         vlog_error( "error: Unknown test number!\n" );
                         clReleaseKernel(k);
@@ -1098,7 +1018,7 @@ static int RunTest_Double( int testNumber )
         for( i = 0; i < sizeof(args ) / sizeof( args[0]); i++ )
             if( (error = clSetKernelArg(k, i, sizeof( cl_mem ), args + i) ))
             {
-                vlog_error( "Error %d setting kernel arg # %ld\n", error, i );
+                vlog_error("Error %d setting kernel arg # %zu\n", error, i);
                 return error;
             }
 
@@ -1139,24 +1059,64 @@ static int RunTest_Double( int testNumber )
                 switch( testNumber )
                 {
                         // Zeros for these should be positive
-                    case 0:     vlog_error( "%ld) Error for %s %s: %a * %a + %a =  *%a vs. %a\n", i, sizeNames_double[ vectorSize], kernelName[ testNumber ],
-                                           a[i], b[i], c[i], correct[testNumber][i], test[i] );       return -1;
-                    case 1:     vlog_error( "%ld) Error for %s %s: %a * %a - %a =  *%a vs. %a\n", i, sizeNames_double[ vectorSize], kernelName[ testNumber ],
-                                           a[i], b[i], c[i], correct[testNumber][i], test[i] );       return -1;
-                    case 2:     vlog_error( "%ld) Error for %s %s: %a + %a * %a =  *%a vs. %a\n", i, sizeNames_double[ vectorSize], kernelName[ testNumber ],
-                                           c[i], a[i], b[i], correct[testNumber][i], test[i] );       return -1;
-                    case 3:     vlog_error( "%ld) Error for %s %s: %a - %a * %a =  *%a vs. %a\n", i, sizeNames_double[ vectorSize], kernelName[ testNumber ],
-                                           c[i], a[i], b[i], correct[testNumber][i], test[i] );       return -1;
+                    case 0:
+                        vlog_error("%zu) Error for %s %s: %a * %a + %a =  *%a "
+                                   "vs. %a\n",
+                                   i, sizeNames_double[vectorSize],
+                                   kernelName[testNumber], a[i], b[i], c[i],
+                                   correct[testNumber][i], test[i]);
+                        return -1;
+                    case 1:
+                        vlog_error("%zu) Error for %s %s: %a * %a - %a =  *%a "
+                                   "vs. %a\n",
+                                   i, sizeNames_double[vectorSize],
+                                   kernelName[testNumber], a[i], b[i], c[i],
+                                   correct[testNumber][i], test[i]);
+                        return -1;
+                    case 2:
+                        vlog_error("%zu) Error for %s %s: %a + %a * %a =  *%a "
+                                   "vs. %a\n",
+                                   i, sizeNames_double[vectorSize],
+                                   kernelName[testNumber], c[i], a[i], b[i],
+                                   correct[testNumber][i], test[i]);
+                        return -1;
+                    case 3:
+                        vlog_error("%zu) Error for %s %s: %a - %a * %a =  *%a "
+                                   "vs. %a\n",
+                                   i, sizeNames_double[vectorSize],
+                                   kernelName[testNumber], c[i], a[i], b[i],
+                                   correct[testNumber][i], test[i]);
+                        return -1;
 
-                        // Zeros for these should be negative
-                    case 4:     vlog_error( "%ld) Error for %s %s: -(%a * %a + %a) =  *%a vs. %a\n", i, sizeNames_double[ vectorSize], kernelName[ testNumber ],
-                                           a[i], b[i], c[i], correct[testNumber][i], test[i] );       return -1;
-                    case 5:     vlog_error( "%ld) Error for %s %s: -(%a * %a - %a) =  *%a vs. %a\n", i, sizeNames_double[ vectorSize], kernelName[ testNumber ],
-                                           a[i], b[i], c[i], correct[testNumber][i], test[i] );       return -1;
-                    case 6:     vlog_error( "%ld) Error for %s %s: -(%a + %a * %a) =  *%a vs. %a\n", i, sizeNames_double[ vectorSize], kernelName[ testNumber ],
-                                           c[i], a[i], b[i], correct[testNumber][i], test[i] );       return -1;
-                    case 7:     vlog_error( "%ld) Error for %s %s: -(%a - %a * %a) =  *%a vs. %a\n", i, sizeNames_double[ vectorSize], kernelName[ testNumber ],
-                                           c[i], a[i], b[i], correct[testNumber][i], test[i] );       return -1;
+                        // Zeros for these shouzu be negative
+                    case 4:
+                        vlog_error("%zu) Error for %s %s: -(%a * %a + %a) =  "
+                                   "*%a vs. %a\n",
+                                   i, sizeNames_double[vectorSize],
+                                   kernelName[testNumber], a[i], b[i], c[i],
+                                   correct[testNumber][i], test[i]);
+                        return -1;
+                    case 5:
+                        vlog_error("%zu) Error for %s %s: -(%a * %a - %a) =  "
+                                   "*%a vs. %a\n",
+                                   i, sizeNames_double[vectorSize],
+                                   kernelName[testNumber], a[i], b[i], c[i],
+                                   correct[testNumber][i], test[i]);
+                        return -1;
+                    case 6:
+                        vlog_error("%zu) Error for %s %s: -(%a + %a * %a) =  "
+                                   "*%a vs. %a\n",
+                                   i, sizeNames_double[vectorSize],
+                                   kernelName[testNumber], c[i], a[i], b[i],
+                                   correct[testNumber][i], test[i]);
+                        return -1;
+                    case 7:
+                        vlog_error("%zu) Error for %s %s: -(%a - %a * %a) =  "
+                                   "*%a vs. %a\n",
+                                   i, sizeNames_double[vectorSize],
+                                   kernelName[testNumber], c[i], a[i], b[i],
+                                   correct[testNumber][i], test[i]);
+                        return -1;
                     default:
                         vlog_error( "error: Unknown test number!\n" );
                         return -2;

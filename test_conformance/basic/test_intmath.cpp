@@ -14,11 +14,12 @@
 // limitations under the License.
 //
 
+#include <cinttypes>
 #include <functional>
 #include <string>
 #include <vector>
 
-#include "procs.h"
+#include "testBase.h"
 
 template <typename T> struct TestDef
 {
@@ -28,8 +29,9 @@ template <typename T> struct TestDef
 };
 
 template <typename T, unsigned N>
-int test_intmath(cl_device_id device, cl_context context,
-                 cl_command_queue queue, int num_elements, std::string typestr)
+static int test_intmath(cl_device_id device, cl_context context,
+                        cl_command_queue queue, int num_elements,
+                        std::string typestr)
 {
     TestDef<T> tests[] = {
         // Test addition
@@ -123,7 +125,7 @@ int test_intmath(cl_device_id device, cl_context context,
     size_t datasize = sizeof(T) * num_elements * N;
 
     // Create device buffers.
-    for (int i = 0; i < ARRAY_SIZE(streams); i++)
+    for (size_t i = 0; i < ARRAY_SIZE(streams); i++)
     {
         streams[i] =
             clCreateBuffer(context, CL_MEM_READ_WRITE, datasize, NULL, &err);
@@ -175,19 +177,19 @@ int test_intmath(cl_device_id device, cl_context context,
         test_error(err, "clEnqueueReadBuffer failed\n");
 
         // Verify results
-        for (int i = 0; i < num_elements * N; i++)
+        for (unsigned i = 0; i < num_elements * N; i++)
         {
             T r = test.ref(inputA[i], inputB[i], inputC[i]);
             if (r != output[i])
             {
                 log_error("\n\nverification failed at index %d\n", i);
-                log_error("-> inputs: %llu, %llu, %llu\n",
-                          static_cast<cl_uint>(inputA[i]),
-                          static_cast<cl_uint>(inputB[i]),
-                          static_cast<cl_uint>(inputC[i]));
-                log_error("-> expected %llu, got %llu\n\n",
-                          static_cast<cl_uint>(r),
-                          static_cast<cl_uint>(output[i]));
+                log_error("-> inputs: %" PRIu64 "%" PRIu64 "%" PRIu64 "\n",
+                          static_cast<cl_ulong>(inputA[i]),
+                          static_cast<cl_ulong>(inputB[i]),
+                          static_cast<cl_ulong>(inputC[i]));
+                log_error("-> expected %" PRIu64 "%" PRIu64 "\n\n",
+                          static_cast<cl_ulong>(r),
+                          static_cast<cl_ulong>(output[i]));
                 return TEST_FAIL;
             }
         }
@@ -197,43 +199,37 @@ int test_intmath(cl_device_id device, cl_context context,
     return TEST_PASS;
 }
 
-int test_intmath_int(cl_device_id device, cl_context context,
-                     cl_command_queue queue, int num_elements)
+REGISTER_TEST(intmath_int)
 {
     return test_intmath<cl_uint, 1>(device, context, queue, num_elements,
                                     "uint");
 }
 
-int test_intmath_int2(cl_device_id device, cl_context context,
-                      cl_command_queue queue, int num_elements)
+REGISTER_TEST(intmath_int2)
 {
     return test_intmath<cl_uint, 2>(device, context, queue, num_elements,
                                     "uint2");
 }
 
-int test_intmath_int4(cl_device_id device, cl_context context,
-                      cl_command_queue queue, int num_elements)
+REGISTER_TEST(intmath_int4)
 {
     return test_intmath<cl_uint, 4>(device, context, queue, num_elements,
                                     "uint4");
 }
 
-int test_intmath_long(cl_device_id device, cl_context context,
-                      cl_command_queue queue, int num_elements)
+REGISTER_TEST(intmath_long)
 {
     return test_intmath<cl_ulong, 1>(device, context, queue, num_elements,
                                      "ulong");
 }
 
-int test_intmath_long2(cl_device_id device, cl_context context,
-                       cl_command_queue queue, int num_elements)
+REGISTER_TEST(intmath_long2)
 {
     return test_intmath<cl_ulong, 2>(device, context, queue, num_elements,
                                      "ulong2");
 }
 
-int test_intmath_long4(cl_device_id device, cl_context context,
-                       cl_command_queue queue, int num_elements)
+REGISTER_TEST(intmath_long4)
 {
     return test_intmath<cl_ulong, 4>(device, context, queue, num_elements,
                                      "ulong4");

@@ -1,6 +1,6 @@
 //
 // Copyright (c) 2017 The Khronos Group Inc.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,8 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "procs.h"
 #include <ctype.h>
+
+#include "testBase.h"
 
 static const char *linear_ids_source[1] = {
 "__kernel void test_linear_ids(__global int2 *out)\n"
@@ -46,8 +47,7 @@ static const char *linear_ids_source[1] = {
 #define MAX_3D 16
 #define MAX_OFFSET 100000
 
-int
-test_get_linear_ids(cl_device_id device, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(get_linear_ids, Version(2, 0))
 {
     clProgramWrapper program;
     clKernelWrapper kernel;
@@ -104,15 +104,19 @@ test_get_linear_ids(cl_device_id device, cl_context context, cl_command_queue qu
 
         switch (dims) {
         case 1:
-            log_info("  testing offset=%u global=%u local=%u...\n", gwo[0], gws[0], lws[0]);
+            log_info("  testing offset=%zu global=%zu local=%zu...\n", gwo[0],
+                     gws[0], lws[0]);
             break;
         case 2:
-            log_info("  testing offset=(%u,%u) global=(%u,%u) local=(%u,%u)...\n",
-                    gwo[0], gwo[1], gws[0], gws[1], lws[0], lws[1]);
+            log_info("  testing offset=(%zu,%zu) global=(%zu,%zu) "
+                     "local=(%zu,%zu)...\n",
+                     gwo[0], gwo[1], gws[0], gws[1], lws[0], lws[1]);
             break;
         case 3:
-            log_info("  testing offset=(%u,%u,%u) global=(%u,%u,%u) local=(%u,%u,%u)...\n",
-                    gwo[0], gwo[1], gwo[2], gws[0], gws[1], gws[2], lws[0], lws[1], lws[2]);
+            log_info("  testing offset=(%zu,%zu,%zu) global=(%zu,%zu,%zu) "
+                     "local=(%zu,%zu,%zu)...\n",
+                     gwo[0], gwo[1], gwo[2], gws[0], gws[1], gws[2], lws[0],
+                     lws[1], lws[2]);
             break;
         }
 
@@ -189,4 +193,3 @@ test_get_linear_ids(cl_device_id device, cl_context context, cl_command_queue qu
     free_mtdata(seed);
     return 0;
 }
-

@@ -30,6 +30,8 @@
 #include <iomanip>
 #include <mutex>
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 #if defined(_WIN32)
 std::string slash = "\\";
@@ -140,7 +142,6 @@ std::string get_kernel_name(const std::string &source)
         if (kernelsList.size() > MAX_LEN_FOR_KERNEL_LIST + 1)
         {
             kernelsList = kernelsList.substr(0, MAX_LEN_FOR_KERNEL_LIST + 1);
-            kernelsList[kernelsList.size() - 1] = '.';
             kernelsList[kernelsList.size() - 1] = '.';
         }
         oss << kernelsList;
@@ -678,17 +679,18 @@ static int create_single_kernel_helper_create_program_offline(
     return CL_SUCCESS;
 }
 
-static int create_single_kernel_helper_create_program(
-    cl_context context, cl_device_id device, cl_program *outProgram,
-    unsigned int numKernelLines, const char **kernelProgram,
-    const char *buildOptions, CompilationMode compilationMode)
+int create_single_kernel_helper_create_program(cl_context context,
+                                               cl_program *outProgram,
+                                               unsigned int numKernelLines,
+                                               const char **kernelProgram,
+                                               const char *buildOptions)
 {
     std::lock_guard<std::mutex> compiler_lock(gCompilerMutex);
 
     std::string filePrefix =
         get_unique_filename_prefix(numKernelLines, kernelProgram, buildOptions);
     bool shouldSaveToDisk = should_save_kernel_source_to_disk(
-        compilationMode, gCompilationCacheMode, gCompilationCachePath,
+        gCompilationMode, gCompilationCacheMode, gCompilationCachePath,
         filePrefix);
 
     if (shouldSaveToDisk)
@@ -701,7 +703,7 @@ static int create_single_kernel_helper_create_program(
             return -1;
         }
     }
-    if (compilationMode == kOnline)
+    if (gCompilationMode == kOnline)
     {
         int error = CL_SUCCESS;
 
@@ -718,40 +720,9 @@ static int create_single_kernel_helper_create_program(
     else
     {
         return create_single_kernel_helper_create_program_offline(
-            context, device, outProgram, numKernelLines, kernelProgram,
-            buildOptions, compilationMode);
+            context, nullptr, outProgram, numKernelLines, kernelProgram,
+            buildOptions, gCompilationMode);
     }
-}
-
-int create_single_kernel_helper_create_program(cl_context context,
-                                               cl_program *outProgram,
-                                               unsigned int numKernelLines,
-                                               const char **kernelProgram,
-                                               const char *buildOptions)
-{
-    return create_single_kernel_helper_create_program(
-        context, NULL, outProgram, numKernelLines, kernelProgram, buildOptions,
-        gCompilationMode);
-}
-
-int create_single_kernel_helper_create_program_for_device(
-    cl_context context, cl_device_id device, cl_program *outProgram,
-    unsigned int numKernelLines, const char **kernelProgram,
-    const char *buildOptions)
-{
-    return create_single_kernel_helper_create_program(
-        context, device, outProgram, numKernelLines, kernelProgram,
-        buildOptions, gCompilationMode);
-}
-
-int create_single_kernel_helper_with_build_options(
-    cl_context context, cl_program *outProgram, cl_kernel *outKernel,
-    unsigned int numKernelLines, const char **kernelProgram,
-    const char *kernelName, const char *buildOptions)
-{
-    return create_single_kernel_helper(context, outProgram, outKernel,
-                                       numKernelLines, kernelProgram,
-                                       kernelName, buildOptions);
 }
 
 // Creates and builds OpenCL C/C++ program, and creates a kernel
@@ -780,7 +751,11 @@ int create_single_kernel_helper(cl_context context, cl_program *outProgram,
         auto version = get_max_OpenCL_C_for_context(context);
 
         std::string cl_std{};
-        if (version >= Version(3, 0))
+        if (version >= Version(3, 1))
+        {
+            cl_std = "-cl-std=CL3.1";
+        }
+        else if (version >= Version(3, 0))
         {
             cl_std = "-cl-std=CL3.0";
         }
@@ -1239,8 +1214,8 @@ int is_image_format_supported(cl_context context, cl_mem_flags flags,
 {
     cl_image_format *list;
     cl_uint count = 0;
-    cl_int err = clGetSupportedImageFormats(context, flags, image_type, 128,
-                                            NULL, &count);
+    cl_int err =
+        clGetSupportedImageFormats(context, flags, image_type, 0, NULL, &count);
     if (count == 0) return 0;
 
     list = (cl_image_format *)malloc(count * sizeof(cl_image_format));
@@ -1276,7 +1251,6 @@ int is_image_format_supported(cl_context context, cl_mem_flags flags,
     return (i < count) ? 1 : 0;
 }
 
-size_t get_pixel_bytes(const cl_image_format *fmt);
 size_t get_pixel_bytes(const cl_image_format *fmt)
 {
     size_t chanCount;
@@ -1319,13 +1293,21 @@ size_t get_pixel_bytes(const cl_image_format *fmt)
         case CL_UNORM_SHORT_565:
         case CL_UNORM_SHORT_555: return 2;
 
-        case CL_UNORM_INT_101010: return 4;
+        case CL_UNORM_INT_101010:
+        case CL_UNORM_INT_101010_2:
+        case CL_UNORM_INT_2_101010_EXT: return 4;
 
         case CL_SNORM_INT8:
         case CL_UNORM_INT8:
         case CL_SIGNED_INT8:
         case CL_UNSIGNED_INT8: return chanCount;
 
+        case CL_UNSIGNED_INT10X6_EXT:
+        case CL_UNSIGNED_INT12X4_EXT:
+        case CL_UNSIGNED_INT14X2_EXT:
+        case CL_UNORM_INT10X6_EXT:
+        case CL_UNORM_INT12X4_EXT:
+        case CL_UNORM_INT14X2_EXT:
         case CL_SNORM_INT16:
         case CL_UNORM_INT16:
         case CL_HALF_FLOAT:
@@ -1511,22 +1493,30 @@ size_t get_min_alignment(cl_context context)
     return align_size;
 }
 
-cl_device_fp_config get_default_rounding_mode(cl_device_id device)
+cl_device_fp_config get_default_rounding_mode(const cl_device_id device,
+                                              const cl_uint param)
 {
     char profileStr[128] = "";
-    cl_device_fp_config single = 0;
-    int error = clGetDeviceInfo(device, CL_DEVICE_SINGLE_FP_CONFIG,
-                                sizeof(single), &single, NULL);
+    cl_device_fp_config config = 0;
+    int error = clGetDeviceInfo(device, param, sizeof(config), &config, NULL);
     if (error)
-        test_error_ret(error, "Unable to get device CL_DEVICE_SINGLE_FP_CONFIG",
-                       0);
+    {
+        std::string config_name = "CL_DEVICE_SINGLE_FP_CONFIG";
+        if (param == CL_DEVICE_HALF_FP_CONFIG)
+            config_name = "CL_DEVICE_HALF_FP_CONFIG";
+        else if (param == CL_DEVICE_DOUBLE_FP_CONFIG)
+            config_name = "CL_DEVICE_DOUBLE_FP_CONFIG";
+        std::string message =
+            std::string("Unable to get device ") + config_name;
+        test_error_ret(error, message.c_str(), 0);
+    }
 
-    if (single & CL_FP_ROUND_TO_NEAREST) return CL_FP_ROUND_TO_NEAREST;
+    if (config & CL_FP_ROUND_TO_NEAREST) return CL_FP_ROUND_TO_NEAREST;
 
-    if (0 == (single & CL_FP_ROUND_TO_ZERO))
+    if (0 == (config & CL_FP_ROUND_TO_ZERO))
         test_error_ret(-1,
                        "FAILURE: device must support either "
-                       "CL_DEVICE_SINGLE_FP_CONFIG or CL_FP_ROUND_TO_NEAREST",
+                       "CL_FP_ROUND_TO_ZERO or CL_FP_ROUND_TO_NEAREST",
                        0);
 
     // Make sure we are an embedded device before allowing a pass
@@ -1615,7 +1605,7 @@ Version get_device_cl_c_version(cl_device_id device)
                                  &opencl_c_version_size_in_bytes);
     test_error_ret(error,
                    "clGetDeviceInfo failed for CL_DEVICE_OPENCL_C_VERSION\n",
-                   (Version{ -1, 0 }));
+                   (Version{ 0, 0 }));
 
     std::string opencl_c_version(opencl_c_version_size_in_bytes, '\0');
     error =
@@ -1624,13 +1614,13 @@ Version get_device_cl_c_version(cl_device_id device)
 
     test_error_ret(error,
                    "clGetDeviceInfo failed for CL_DEVICE_OPENCL_C_VERSION\n",
-                   (Version{ -1, 0 }));
+                   (Version{ 0, 0 }));
 
     // Scrape out the major, minor pair from the string.
     auto major = opencl_c_version[opencl_c_version.find('.') - 1];
     auto minor = opencl_c_version[opencl_c_version.find('.') + 1];
 
-    return Version{ major - '0', minor - '0' };
+    return Version{ (cl_uint)(major - '0'), (cl_uint)(minor - '0') };
 }
 
 Version get_device_latest_cl_c_version(cl_device_id device)
@@ -1648,7 +1638,7 @@ Version get_device_latest_cl_c_version(cl_device_id device)
                             &opencl_c_all_versions_size_in_bytes);
         test_error_ret(
             error, "clGetDeviceInfo failed for CL_DEVICE_OPENCL_C_ALL_VERSIONS",
-            (Version{ -1, 0 }));
+            (Version{ 0, 0 }));
         std::vector<cl_name_version> name_versions(
             opencl_c_all_versions_size_in_bytes / sizeof(cl_name_version));
         error = clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS,
@@ -1656,13 +1646,15 @@ Version get_device_latest_cl_c_version(cl_device_id device)
                                 name_versions.data(), nullptr);
         test_error_ret(
             error, "clGetDeviceInfo failed for CL_DEVICE_OPENCL_C_ALL_VERSIONS",
-            (Version{ -1, 0 }));
+            (Version{ 0, 0 }));
 
         Version max_supported_cl_c_version{};
         for (const auto &name_version : name_versions)
         {
-            Version current_version{ CL_VERSION_MAJOR(name_version.version),
-                                     CL_VERSION_MINOR(name_version.version) };
+            Version current_version{
+                static_cast<cl_uint>(CL_VERSION_MAJOR(name_version.version)),
+                static_cast<cl_uint>(CL_VERSION_MINOR(name_version.version))
+            };
             max_supported_cl_c_version =
                 (current_version > max_supported_cl_c_version)
                 ? current_version
@@ -1682,7 +1674,7 @@ Version get_max_OpenCL_C_for_context(cl_context context)
     auto error = clGetContextInfo(context, CL_CONTEXT_DEVICES, 0, nullptr,
                                   &devices_size_in_bytes);
     test_error_ret(error, "clGetDeviceInfo failed for CL_CONTEXT_DEVICES",
-                   (Version{ -1, 0 }));
+                   (Version{ 0, 0 }));
     std::vector<cl_device_id> devices(devices_size_in_bytes
                                       / sizeof(cl_device_id));
     error = clGetContextInfo(context, CL_CONTEXT_DEVICES, devices_size_in_bytes,
@@ -1745,8 +1737,10 @@ bool device_supports_cl_c_version(cl_device_id device, Version version)
 
         for (const auto &name_version : name_versions)
         {
-            Version current_version{ CL_VERSION_MAJOR(name_version.version),
-                                     CL_VERSION_MINOR(name_version.version) };
+            Version current_version{
+                static_cast<cl_uint>(CL_VERSION_MAJOR(name_version.version)),
+                static_cast<cl_uint>(CL_VERSION_MINOR(name_version.version))
+            };
             if (current_version == version)
             {
                 return true;
@@ -1770,7 +1764,7 @@ bool poll_until(unsigned timeout_ms, unsigned interval_ms,
         {
             break;
         }
-        usleep(interval_ms * 1000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
         time_spent_ms += interval_ms;
     }
 

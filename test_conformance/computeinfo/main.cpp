@@ -35,11 +35,11 @@ typedef struct
 } device_info;
 
 device_info device_infos[] = {
-    { CL_DEVICE_TYPE_DEFAULT, "CL_DEVICE_TYPE_DEFAULT", -1, NULL },
-    { CL_DEVICE_TYPE_CPU, "CL_DEVICE_TYPE_CPU", -1, NULL },
-    { CL_DEVICE_TYPE_GPU, "CL_DEVICE_TYPE_GPU", -1, NULL },
-    { CL_DEVICE_TYPE_ACCELERATOR, "CL_DEVICE_TYPE_ACCELERATOR", -1, NULL },
-    { CL_DEVICE_TYPE_ALL, "CL_DEVICE_TYPE_ALL", -1, NULL },
+    { CL_DEVICE_TYPE_DEFAULT, "CL_DEVICE_TYPE_DEFAULT", 0, NULL },
+    { CL_DEVICE_TYPE_CPU, "CL_DEVICE_TYPE_CPU", 0, NULL },
+    { CL_DEVICE_TYPE_GPU, "CL_DEVICE_TYPE_GPU", 0, NULL },
+    { CL_DEVICE_TYPE_ACCELERATOR, "CL_DEVICE_TYPE_ACCELERATOR", 0, NULL },
+    { CL_DEVICE_TYPE_ALL, "CL_DEVICE_TYPE_ALL", 0, NULL },
 };
 
 // config types
@@ -95,8 +95,8 @@ typedef struct _version version_t;
 
 struct _extensions
 {
-    int cl_khr_fp64;
-    int cl_khr_fp16;
+    int has_cl_khr_fp64;
+    int has_cl_khr_fp16;
 };
 typedef struct _extensions extensions_t;
 
@@ -188,6 +188,7 @@ config_info config_infos[] = {
     CONFIG_INFO(2, 0, CL_DEVICE_IMAGE_BASE_ADDRESS_ALIGNMENT, cl_uint),
 
     CONFIG_INFO(1, 1, CL_DEVICE_MEM_BASE_ADDR_ALIGN, cl_uint),
+    CONFIG_INFO(1, 1, CL_DEVICE_HALF_FP_CONFIG, cl_device_fp_config),
     CONFIG_INFO(1, 1, CL_DEVICE_SINGLE_FP_CONFIG, cl_device_fp_config),
     CONFIG_INFO(1, 1, CL_DEVICE_DOUBLE_FP_CONFIG, cl_device_fp_config),
     CONFIG_INFO(1, 1, CL_DEVICE_GLOBAL_MEM_CACHE_TYPE,
@@ -439,8 +440,8 @@ int getPlatformConfigInfo(cl_platform_id platform, config_info* info)
                 err = clGetPlatformInfo(platform, info->opcode, config_size_set,
                                         &info->config.cl_name_version_single,
                                         &config_size_ret);
+                size_err = config_size_set != config_size_ret;
             }
-            size_err = config_size_set != config_size_ret;
             break;
         default:
             log_error("Unknown config type: %d\n", info->config_type);
@@ -585,8 +586,8 @@ int getConfigInfo(cl_device_id device, config_info* info)
                 err = clGetDeviceInfo(device, info->opcode, config_size_set,
                                       &info->config.cl_name_version_single,
                                       &config_size_ret);
+                size_err = config_size_set != config_size_ret;
             }
-            size_err = config_size_set != config_size_ret;
             break;
         default:
             log_error("Unknown config type: %d\n", info->config_type);
@@ -735,7 +736,7 @@ void dumpConfigInfo(config_info* info)
             }
             break;
         case type_cl_device_id:
-            log_info("\t%s == %ld\n", info->opcode_name,
+            log_info("\t%s == %" PRIdPTR "\n", info->opcode_name,
                      (intptr_t)info->config.device_id);
             break;
         case type_cl_device_affinity_domain:
@@ -908,12 +909,6 @@ void dumpConfigInfo(config_info* info)
                 {
                     cl_name_version new_version_item =
                         info->config.cl_name_version_array[f];
-                    cl_version new_version_major =
-                        CL_VERSION_MAJOR_KHR(new_version_item.version);
-                    cl_version new_version_minor =
-                        CL_VERSION_MINOR_KHR(new_version_item.version);
-                    cl_version new_version_patch =
-                        CL_VERSION_PATCH_KHR(new_version_item.version);
                     log_info("\t\t\"%s\" %d.%d.%d\n", new_version_item.name,
                              CL_VERSION_MAJOR_KHR(new_version_item.version),
                              CL_VERSION_MINOR_KHR(new_version_item.version),
@@ -1040,6 +1035,13 @@ int parseVersion(char const* str, version_t* version)
         version->minor = 0;
         rc = 0;
     }
+    else if (strncmp(str, "OpenCL 3.1", 10) == 0
+             && (str[10] == 0 || str[10] == ' '))
+    {
+        version->major = 3;
+        version->minor = 1;
+        rc = 0;
+    }
     else
     {
         log_error("ERROR: Unexpected version string: `%s'.\n", str);
@@ -1069,11 +1071,11 @@ int parseExtensions(char const* str, extensions_t* extensions)
         }
         if (strncmp(begin, "cl_khr_fp64", length) == 0)
         {
-            extensions->cl_khr_fp64 = 1;
+            extensions->has_cl_khr_fp64 = 1;
         }
         if (strncmp(begin, "cl_khr_fp16", length) == 0)
         {
-            extensions->cl_khr_fp16 = 1;
+            extensions->has_cl_khr_fp16 = 1;
         }
         begin += length; // Skip word.
         if (begin[0] == ' ')
@@ -1112,13 +1114,13 @@ int getConfigInfos(cl_device_id device)
             // version 1.1, we have to check doubles are sopported. In
             // OpenCL 1.2 CL_DEVICE_DOUBLE_FP_CONFIG should be reported
             // unconditionally.
-            get = extensions.cl_khr_fp64;
+            get = extensions.has_cl_khr_fp64;
         };
         if (info.opcode == CL_DEVICE_HALF_FP_CONFIG)
         {
             // CL_DEVICE_HALF_FP_CONFIG should be reported only when cl_khr_fp16
             // extension is available
-            get = extensions.cl_khr_fp16;
+            get = extensions.has_cl_khr_fp16;
         };
         if (get)
         {
@@ -1256,8 +1258,7 @@ int getPlatformCapabilities(cl_platform_id platform)
     return total_errors;
 }
 
-int test_computeinfo(cl_device_id deviceID, cl_context context,
-                     cl_command_queue ignoreQueue, int num_elements)
+REGISTER_TEST(computeinfo)
 {
     int err;
     int total_errors = 0;
@@ -1368,8 +1369,7 @@ int test_computeinfo(cl_device_id deviceID, cl_context context,
     else
     {
         // print device info
-        int onInfo;
-        for (onInfo = 0;
+        for (size_t onInfo = 0;
              onInfo < sizeof(device_infos) / sizeof(device_infos[0]); onInfo++)
         {
             log_info("Getting device IDs for %s devices\n",
@@ -1396,11 +1396,10 @@ int test_computeinfo(cl_device_id deviceID, cl_context context,
                 test_error(err, "clGetDeviceIDs failed");
             }
 
-            int onDevice;
-            for (onDevice = 0; onDevice < device_infos[onInfo].num_devices;
-                 onDevice++)
+            for (size_t onDevice = 0;
+                 onDevice < device_infos[onInfo].num_devices; onDevice++)
             {
-                log_info("%s Device %d of %d Info:\n",
+                log_info("%s Device %zu of %d Info:\n",
                          device_infos[onInfo].device_type_name, onDevice + 1,
                          device_infos[onInfo].num_devices);
                 total_errors +=
@@ -1418,47 +1417,36 @@ int test_computeinfo(cl_device_id deviceID, cl_context context,
     return total_errors;
 }
 
-extern int test_extended_versioning(cl_device_id, cl_context, cl_command_queue,
-                                    int);
-extern int test_device_uuid(cl_device_id, cl_context, cl_command_queue, int);
-extern int test_conformance_version(cl_device_id, cl_context, cl_command_queue,
-                                    int);
-extern int test_pci_bus_info(cl_device_id, cl_context, cl_command_queue, int);
-
-test_definition test_list[] = {
-    ADD_TEST(computeinfo),
-    ADD_TEST(extended_versioning),
-    ADD_TEST(device_uuid),
-    ADD_TEST_VERSION(conformance_version, Version(3, 0)),
-    ADD_TEST(pci_bus_info),
-};
-
-const int test_num = ARRAY_SIZE(test_list);
-
-int main(int argc, const char** argv)
+static test_status parseArgs(int& argc, const char* argv[],
+                             std::vector<std::string>& removed_args,
+                             std::string& help)
 {
-    const char** argList = (const char**)calloc(argc, sizeof(char*));
-    if (NULL == argList)
-    {
-        log_error("Failed to allocate memory for argList array.\n");
-        return 1;
-    }
+    help = "        -v     Dump supported formats\n";
 
-    argList[0] = argv[0];
-    size_t argCount = 1;
+    std::vector<const char*> argList;
+    argList.push_back(argv[0]);
 
     for (int i = 1; i < argc; i++)
     {
-        if (strcmp(argv[1], "-v") == 0)
+        if (strcmp(argv[i], "-v") == 0)
         {
             dump_supported_formats = 1;
+            removed_args.push_back(argv[i]);
         }
         else
         {
-            argList[argCount] = argv[i];
-            argCount++;
+            argList.push_back(argv[i]);
         }
     }
 
-    return runTestHarness(argCount, argList, test_num, test_list, true, 0);
+    update_argc_argv_from_args_list(argList, argc, argv);
+    return TEST_PASS;
+}
+
+int main(int argc, const char* argv[])
+{
+    return runTestHarnessWithCheckAndParse(
+        argc, argv, test_registry::getInstance().num_tests(),
+        test_registry::getInstance().definitions(), true, 0, nullptr,
+        parseArgs);
 }

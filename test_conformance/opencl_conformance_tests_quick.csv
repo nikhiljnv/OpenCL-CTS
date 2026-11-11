@@ -77,7 +77,7 @@ Select,select/test_select
 #Conversions,conversions/test_conversions
 Contractions,contractions/test_contractions
 Math,math_brute_force/test_bruteforce -w
-Integer Ops,integer_ops/test_integer_ops integer_* quick_*
+Integer Ops,integer_ops/test_integer_ops -w
 Half Ops,half/test_half -w
 
 #####################################
@@ -95,7 +95,7 @@ Workgroups,workgroups/test_workgroups
 # OpenCL 2.1 tests
 #####################################
 Device timer,device_timer/test_device_timer
-SPIRV new,spirv_new/test_spirv_new --spirv-binaries-path spirv_bin
+SPIRV new,spirv_new/test_spirv_new
 
 #########################################
 # Extensions
@@ -105,3 +105,8 @@ Mipmaps (Kernel),images/kernel_read_write/test_image_streams test_mipmaps CL_FIL
 Mipmaps (clCopyImage),images/clCopyImage/test_cl_copy_images test_mipmaps
 Mipmaps (clReadWriteImage),images/clReadWriteImage/test_cl_read_write_images test_mipmaps
 Subgroups,subgroups/test_subgroups
+cl_ext_cxx_for_opencl,extensions/cl_ext_cxx_for_opencl/test_cl_ext_cxx_for_opencl
+cl_khr_semaphore,extensions/cl_khr_semaphore/test_cl_khr_semaphore
+cl_khr_command_buffer,extensions/cl_khr_command_buffer/test_cl_khr_command_buffer
+cl_khr_command_buffer_mutable_dispatch,extensions/cl_khr_command_buffer/cl_khr_command_buffer_mutable_dispatch/test_cl_khr_mutable_dispatch
+cl_khr_kernel_clock,extensions/cl_khr_kernel_clock/test_cl_khr_kernel_clock

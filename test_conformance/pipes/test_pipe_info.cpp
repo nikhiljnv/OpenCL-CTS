@@ -13,13 +13,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "procs.h"
+
+#include <cinttypes>
+
+#include "harness/testHarness.h"
+#include "harness/typeWrappers.h"
+#include "harness/parseParameters.h"
 
 const char* pipe_kernel_code = {
     "__kernel void pipe_kernel(__write_only pipe int out_pipe)\n"
     "{}\n" };
 
-int test_pipe_info( cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements )
+REGISTER_TEST(pipe_info)
 {
     clMemWrapper pipe;
     cl_int err;
@@ -39,8 +44,7 @@ int test_pipe_info( cl_device_id deviceID, cl_context context, cl_command_queue 
 
     if (pipe_width != returnVal)
     {
-        log_error("Error in clGetPipeInfo() check of pipe packet size\n");
-        return -1;
+        test_fail("Error in clGetPipeInfo() check of pipe packet size\n");
     }
     else
     {
@@ -52,29 +56,38 @@ int test_pipe_info( cl_device_id deviceID, cl_context context, cl_command_queue 
 
     if(pipe_depth != returnVal)
     {
-        log_error( "Error in clGetPipeInfo() check of pipe max packets\n" );
-        return -1;
+        test_fail("Error in clGetPipeInfo() check of pipe max packets\n");
     }
     else
     {
         log_info( " CL_PIPE_MAX_PACKETS passed.\n" );
     }
 
-    err = create_single_kernel_helper_with_build_options(context, &program, &kernel, 1, (const char**)&pipe_kernel_code, "pipe_kernel", "-cl-std=CL2.0 -cl-kernel-arg-info");
-    test_error_ret(err, " Error creating program", -1);
+    err = create_single_kernel_helper(context, &program, &kernel, 1,
+                                      &pipe_kernel_code, "pipe_kernel",
+                                      "-cl-std=CL2.0 -cl-kernel-arg-info");
+    test_error_fail(err, "Error creating program");
 
     cl_kernel_arg_type_qualifier arg_type_qualifier = 0;
-    cl_kernel_arg_type_qualifier expected_type_qualifier = CL_KERNEL_ARG_TYPE_PIPE;
-    err = clGetKernelArgInfo( kernel, 0, CL_KERNEL_ARG_TYPE_QUALIFIER, sizeof(arg_type_qualifier), &arg_type_qualifier, NULL );
-    test_error_ret(err, " clSetKernelArgInfo failed", -1);
-    err = (arg_type_qualifier != expected_type_qualifier);
-
-    if(err)
+    err = clGetKernelArgInfo(kernel, 0, CL_KERNEL_ARG_TYPE_QUALIFIER,
+                             sizeof(arg_type_qualifier), &arg_type_qualifier,
+                             NULL);
+    if (gCompilationMode == kOnline
+        || (gCompilationMode == kSpir_v && err == CL_SUCCESS))
     {
-        print_error(err, "ERROR: Bad type qualifier\n");
-        return -1;
+        test_error_fail(err, "clGetKernelArgInfo failed");
+        if (arg_type_qualifier != CL_KERNEL_ARG_TYPE_PIPE)
+        {
+            test_fail("ERROR: Incorrect type qualifier: 0x%" PRIx64 "\n",
+                      arg_type_qualifier);
+        }
+    }
+    else
+    {
+        test_failure_error_ret(err, CL_KERNEL_ARG_INFO_NOT_AVAILABLE,
+                               "clGetKernelArgInfo error not as expected",
+                               TEST_FAIL);
     }
 
-    return err;
-
+    return TEST_PASS;
 }

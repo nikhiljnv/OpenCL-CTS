@@ -1,33 +1,23 @@
-# Import function list from math_brute_force
-add_definitions(-DFUNCTION_LIST_ULPS_ONLY)
+set(MODULE_NAME SPIR)
 
-set(SPIR_OUT ${CONFORMANCE_PREFIX}spir${CONFORMANCE_SUFFIX})
-
-set (SPIR_SOURCES
+set (${MODULE_NAME}_SOURCES
     main.cpp
     datagen.cpp
     run_build_test.cpp
     run_services.cpp
     kernelargs.cpp
-    ../math_brute_force/function_list.cpp
+    ${CLConform_SOURCE_DIR}/test_common/harness/math_function_list.cpp
 )
 
-add_executable(${SPIR_OUT}
-    ${SPIR_SOURCES})
+include(../CMakeCommon.txt)
+
+target_compile_definitions(${${MODULE_NAME}_OUT} PRIVATE FUNCTION_LIST_ULPS_ONLY)
 
 if(UNIX)
-    set_target_properties(${SPIR_OUT} PROPERTIES
-       COMPILE_FLAGS "-fexceptions -frtti")
+    target_compile_options(${${MODULE_NAME}_OUT} PRIVATE -fexceptions -frtti)
 elseif(MSVC)
-    set_target_properties(${SPIR_OUT} PROPERTIES
-       COMPILE_FLAGS "/GR /EHs /EHc")
+    target_compile_options(${${MODULE_NAME}_OUT} PRIVATE /GR /EHs /EHc)
 endif()
-
-TARGET_LINK_LIBRARIES(${SPIR_OUT} harness
-    ${CLConform_LIBRARIES})
-
-
-set_source_files_properties(${SPIR_SOURCES} PROPERTIES LANGUAGE CXX)
 
 # Need to copy the spir zips to sit beside the executable
 
@@ -59,8 +49,10 @@ set(SPIR_FILES
 
 foreach(input_file ${SPIR_FILES})
     add_custom_command(
-    TARGET ${SPIR_OUT}
-    POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/${input_file}" "$<TARGET_FILE_DIR:${SPIR_OUT}>/"
-)
+        TARGET ${${MODULE_NAME}_OUT}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/${input_file}" "$<TARGET_FILE_DIR:${${MODULE_NAME}_OUT}>/"
+    )
 endforeach(input_file)
+
+install(FILES ${SPIR_FILES} DESTINATION ${CMAKE_INSTALL_BINDIR}/$<CONFIG>)

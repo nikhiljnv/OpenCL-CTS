@@ -148,15 +148,13 @@ void cross_product( const float *vecA, const float *vecB, float *outVector, floa
 }
 
 
-
-
-int test_geom_cross(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements )
+REGISTER_TEST(geom_cross)
 {
     int vecsize;
     RandomSeed seed(gRandomSeed);
 
     /* Get the default rounding mode */
-    cl_device_fp_config defaultRoundingMode = get_default_rounding_mode(deviceID);
+    cl_device_fp_config defaultRoundingMode = get_default_rounding_mode(device);
     if( 0 == defaultRoundingMode )
         return -1;
 
@@ -240,20 +238,22 @@ int test_geom_cross(cl_device_id deviceID, cl_context context, cl_command_queue 
             // On an embedded device w/ round-to-zero, 3 ulps is the worst-case tolerance for cross product
             cross_product( inDataA + i * vecsize, inDataB + i * vecsize, testVector, errorTolerances, 3.f );
 
-        // RTZ devices accrue approximately double the amount of error per operation.  Allow for that.
-        if( defaultRoundingMode == CL_FP_ROUND_TO_ZERO )
-        {
-            errorTolerances[0] *= 2.0f;
-            errorTolerances[1] *= 2.0f;
-            errorTolerances[2] *= 2.0f;
-            errorTolerances[3] *= 2.0f;
-        }
+            // RTZ devices accrue approximately double the amount of error per
+            // operation.  Allow for that.
+            if (defaultRoundingMode == CL_FP_ROUND_TO_ZERO)
+            {
+                errorTolerances[0] *= 2.0f;
+                errorTolerances[1] *= 2.0f;
+                errorTolerances[2] *= 2.0f;
+            }
 
             float errs[] = { fabsf( testVector[ 0 ] - outData[ i * vecsize + 0 ] ),
                              fabsf( testVector[ 1 ] - outData[ i * vecsize + 1 ] ),
                              fabsf( testVector[ 2 ] - outData[ i * vecsize + 2 ] ) };
 
-            if( errs[ 0 ] > errorTolerances[ 0 ] || errs[ 1 ] > errorTolerances[ 1 ] || errs[ 2 ] > errorTolerances[ 2 ] )
+            if (errs[0] > errorTolerances[0] || errs[1] > errorTolerances[1]
+                || errs[2] > errorTolerances[2]
+                || (vecsize == 4 && outData[i * vecsize + 3] != testVector[3]))
             {
                 log_error( "ERROR: Data sample %d does not validate! Expected (%a,%a,%a,%a), got (%a,%a,%a,%a)\n",
                           i, testVector[0], testVector[1], testVector[2], testVector[3],
@@ -269,12 +269,16 @@ int test_geom_cross(cl_device_id deviceID, cl_context context, cl_command_queue 
         }
     } // for(vecsize=...
 
-    if(!is_extension_available(deviceID, "cl_khr_fp64")) {
+    if (!is_extension_available(device, "cl_khr_fp64"))
+    {
         log_info("Extension cl_khr_fp64 not supported; skipping double tests.\n");
         return 0;
-    } else {
+    }
+    else
+    {
         log_info("Testing doubles...\n");
-        return test_geom_cross_double( deviceID,  context,  queue,  num_elements, seed);
+        return test_geom_cross_double(device, context, queue, num_elements,
+                                      seed);
     }
 }
 
@@ -497,7 +501,7 @@ double verifyDot( float *srcA, float *srcB, size_t vecSize )
     return total;
 }
 
-int test_geom_dot(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(geom_dot)
 {
     size_t sizes[] = { 1, 2, 3, 4, 0 };
     unsigned int size;
@@ -516,14 +520,14 @@ int test_geom_dot(cl_device_id deviceID, cl_context context, cl_command_queue qu
     if (retVal)
         return retVal;
 
-    if(!is_extension_available(deviceID, "cl_khr_fp64"))
+    if (!is_extension_available(device, "cl_khr_fp64"))
     {
         log_info("Extension cl_khr_fp64 not supported; skipping double tests.\n");
         return 0;
     }
 
     log_info("Testing doubles...\n");
-    return test_geom_dot_double( deviceID,  context,  queue,  num_elements, seed);
+    return test_geom_dot_double(device, context, queue, num_elements, seed);
 }
 
 double verifyFastDistance( float *srcA, float *srcB, size_t vecSize )
@@ -542,7 +546,7 @@ double verifyFastDistance( float *srcA, float *srcB, size_t vecSize )
     return sqrt( total );
 }
 
-int test_geom_fast_distance(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(geom_fast_distance)
 {
     size_t sizes[] = { 1, 2, 3, 4, 0 };
     unsigned int size;
@@ -589,7 +593,7 @@ double verifyDistance( float *srcA, float *srcB, size_t vecSize )
     return sqrt( total );
 }
 
-int test_geom_distance(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(geom_distance)
 {
     size_t sizes[] = { 1, 2, 3, 4, 0 };
     unsigned int size;
@@ -616,13 +620,14 @@ int test_geom_distance(cl_device_id deviceID, cl_context context, cl_command_que
     if (retVal)
         return retVal;
 
-    if(!is_extension_available(deviceID, "cl_khr_fp64"))
+    if (!is_extension_available(device, "cl_khr_fp64"))
     {
         log_info("Extension cl_khr_fp64 not supported; skipping double tests.\n");
         return 0;
     } else {
         log_info("Testing doubles...\n");
-        return test_geom_distance_double( deviceID,  context,  queue,  num_elements, seed);
+        return test_geom_distance_double(device, context, queue, num_elements,
+                                         seed);
     }
 }
 
@@ -754,7 +759,7 @@ double verifyLength( float *srcA, size_t vecSize )
     return sqrt( total );
 }
 
-int test_geom_length(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(geom_length)
 {
     size_t sizes[] = { 1, 2, 3, 4, 0 };
     unsigned int size;
@@ -781,7 +786,7 @@ int test_geom_length(cl_device_id deviceID, cl_context context, cl_command_queue
     if (retVal)
         return retVal;
 
-    if(!is_extension_available(deviceID, "cl_khr_fp64"))
+    if (!is_extension_available(device, "cl_khr_fp64"))
     {
         log_info("Extension cl_khr_fp64 not supported; skipping double tests.\n");
         return 0;
@@ -789,7 +794,8 @@ int test_geom_length(cl_device_id deviceID, cl_context context, cl_command_queue
     else
     {
         log_info("Testing doubles...\n");
-        return test_geom_length_double( deviceID,  context,  queue,  num_elements, seed);
+        return test_geom_length_double(device, context, queue, num_elements,
+                                       seed);
     }
 }
 
@@ -809,7 +815,7 @@ double verifyFastLength( float *srcA, size_t vecSize )
     return sqrt( total );
 }
 
-int test_geom_fast_length(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(geom_fast_length)
 {
     size_t sizes[] = { 1, 2, 3, 4, 0 };
     unsigned int size;
@@ -1059,7 +1065,7 @@ void verifyNormalize( float *srcA, float *dst, size_t vecSize )
         dst[i] = (float)( (double)srcA[i] / value );
 }
 
-int test_geom_normalize(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(geom_normalize)
 {
     size_t sizes[] = { 1, 2, 3, 4, 0 };
     unsigned int size;
@@ -1084,18 +1090,19 @@ int test_geom_normalize(cl_device_id deviceID, cl_context context, cl_command_qu
     if (retVal)
         return retVal;
 
-    if(!is_extension_available(deviceID, "cl_khr_fp64"))
+    if (!is_extension_available(device, "cl_khr_fp64"))
     {
         log_info("Extension cl_khr_fp64 not supported; skipping double tests.\n");
         return 0;
     } else {
         log_info("Testing doubles...\n");
-        return test_geom_normalize_double( deviceID,  context,  queue,  num_elements, seed);
+        return test_geom_normalize_double(device, context, queue, num_elements,
+                                          seed);
     }
 }
 
 
-int test_geom_fast_normalize(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(geom_fast_normalize)
 {
     size_t sizes[] = { 1, 2, 3, 4, 0 };
     unsigned int size;

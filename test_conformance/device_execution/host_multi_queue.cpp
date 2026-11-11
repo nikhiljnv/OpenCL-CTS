@@ -17,16 +17,15 @@
 #include <string.h>
 #include "harness/testHarness.h"
 #include "harness/typeWrappers.h"
+#include "harness/parseParameters.h"
 
 #include <vector>
 
-#include "procs.h"
 #include "utils.h"
 #include <time.h>
 
 
 #ifdef CL_VERSION_2_0
-extern int gWimpyMode;
 static const char* multi_queue_simple_block1[] =
 {
     NL, "void block_fn(size_t tid, int mul, __global int* res)"
@@ -129,7 +128,7 @@ static const kernel_src sources_multi_queue_block[] =
 static const size_t num_kernels_multi_queue_block = arr_size(sources_multi_queue_block);
 
 
-int test_host_multi_queue(cl_device_id device, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(host_multi_queue)
 {
     cl_uint i;
     cl_int err_ret, res = 0;
@@ -157,7 +156,9 @@ int test_host_multi_queue(cl_device_id device, cl_context context, cl_command_qu
     };
 
     dev_queue = clCreateCommandQueueWithProperties(context, device, queue_prop_def, &err_ret);
-    test_error(err_ret, "clCreateCommandQueueWithProperties(CL_QUEUE_DEVICE|CL_QUEUE_DEFAULT) failed");
+    test_error(err_ret,
+               "clCreateCommandQueueWithProperties(CL_QUEUE_ON_DEVICE | "
+               "CL_QUEUE_ON_DEVICE_DEFAULT) failed");
 
     cl_uint n = num_kernels_multi_queue_block; // Number of host queues
     std::vector<clCommandQueueWrapper> queues(n);
@@ -224,8 +225,6 @@ int test_host_multi_queue(cl_device_id device, cl_context context, cl_command_qu
 
     return res;
 }
-
-
 
 
 #endif

@@ -19,11 +19,6 @@
 #include <sstream>
 #include <string>
 
-using namespace std;
-/*
-
-*/
-
 const char *queue_hint_test_kernel[] = {
 "__kernel void vec_cpy(__global int *src, __global int *dst)\n"
 "{\n"
@@ -78,9 +73,7 @@ int test_enqueue(cl_context context, clCommandQueueWrapper& queue, clKernelWrapp
 }
 
 
-
-
-int test_queue_hint(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(queue_hint)
 {
     if (num_elements <= 0)
     {
@@ -93,13 +86,14 @@ int test_queue_hint(cl_device_id deviceID, cl_context context, cl_command_queue 
     clProgramWrapper program;
     clKernelWrapper kernel;
 
-    err = create_single_kernel_helper_with_build_options(context, &program, &kernel, 1, queue_hint_test_kernel, "vec_cpy", NULL);
+    err = create_single_kernel_helper(context, &program, &kernel, 1,
+                                      queue_hint_test_kernel, "vec_cpy");
     if (err != 0)
     {
         return err;
     }
 
-    if (is_extension_available(deviceID, "cl_khr_priority_hints"))
+    if (is_extension_available(device, "cl_khr_priority_hints"))
     {
         log_info("Testing cl_khr_priority_hints...\n");
 
@@ -121,7 +115,8 @@ int test_queue_hint(cl_device_id deviceID, cl_context context, cl_command_queue 
 
         for (int i = 0; i < 3; ++i)
         {
-            clCommandQueueWrapper q = clCreateCommandQueueWithProperties(context, deviceID, queue_prop[i], &err);
+            clCommandQueueWrapper q = clCreateCommandQueueWithProperties(
+                context, device, queue_prop[i], &err);
             test_error(err, "clCreateCommandQueueWithProperties failed");
 
             err = test_enqueue(context, q, kernel, (size_t)num_elements);
@@ -136,7 +131,7 @@ int test_queue_hint(cl_device_id deviceID, cl_context context, cl_command_queue 
         log_info("cl_khr_priority_hints is not supported.\n");
     }
 
-    if (is_extension_available(deviceID, "cl_khr_throttle_hints"))
+    if (is_extension_available(device, "cl_khr_throttle_hints"))
     {
         log_info("Testing cl_khr_throttle_hints...\n");
         cl_queue_properties queue_prop[][3] =
@@ -157,7 +152,8 @@ int test_queue_hint(cl_device_id deviceID, cl_context context, cl_command_queue 
 
         for (int i = 0; i < 3; ++i)
         {
-            clCommandQueueWrapper q = clCreateCommandQueueWithProperties(context, deviceID, queue_prop[i], &err);
+            clCommandQueueWrapper q = clCreateCommandQueueWithProperties(
+                context, device, queue_prop[i], &err);
             test_error(err, "clCreateCommandQueueWithProperties failed");
 
             err = test_enqueue(context, q, kernel, (size_t)num_elements);
@@ -175,4 +171,3 @@ int test_queue_hint(cl_device_id deviceID, cl_context context, cl_command_queue 
 
     return 0;
 }
-

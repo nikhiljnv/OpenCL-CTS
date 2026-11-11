@@ -13,21 +13,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "harness/compat.h"
+#include "testBase.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#include "procs.h"
 #include "harness/conversions.h"
 #include "harness/ThreadPool.h"
+#include "harness/parseParameters.h"
 
 #define NUM_TESTS 23
 
-#define  LONG_MATH_SHIFT_SIZE 26
-#define QUICK_MATH_SHIFT_SIZE 16
+#define LONG_MATH_SHIFT_SIZE 25
+#define INT_MATH_SHIFT_SIZE 24
+#define SHORT_MATH_SHIFT_SIZE 23
+#define CHAR_MATH_SHIFT_SIZE 16
+#define SHIFT_WIMPY_REDUCTION 7
 
 static const char *kernel_code =
 "__kernel void test(__global %s%s *srcA, __global %s%s *srcB, __global %s%s *dst)\n"
@@ -112,27 +115,97 @@ static const char *kernel_code_question_colon_V3 =
 "}\n";
 
 
+template <typename InputTy, typename IntTy, typename GenTy>
+void init_data(uint64_t indx, uint32_t num_elements, InputTy *input_ptr[],
+               MTdata d, int num_runs_shift, GenTy (*genrand)(MTdata))
+{
+    const auto &specialValues = GetIntSpecialValues<IntTy>(1, gWimpyMode);
+    assert((1ULL << (num_runs_shift / 2)) >= specialValues.size());
+    uint32_t index;
+    const uint64_t num_specials = specialValues.size();
+    const uint64_t total_special_pairs = num_specials * num_specials;
+    for (index = 0;
+         ((index + indx) < total_special_pairs) && index < num_elements;
+         index++)
+    {
+        input_ptr[0][index] = bitcast<IntTy, InputTy>(
+            specialValues[(index + indx) % num_specials]);
+        input_ptr[1][index] = bitcast<IntTy, InputTy>(
+            specialValues[(index + indx) / num_specials]);
+    }
+    for (; index < num_elements; index++)
+    {
+        input_ptr[0][index] = bitcast<GenTy, InputTy>(genrand(d));
+        input_ptr[1][index] = bitcast<GenTy, InputTy>(genrand(d));
+    }
+}
 
+template <typename InputTy>
+void init_data_16bit(uint64_t indx, uint32_t num_elements, InputTy *input_ptr[],
+                     MTdata d, int num_runs_shift)
+{
+    const auto &specialValues = GetIntSpecialValues<uint16_t>(1, gWimpyMode);
+    assert((1ULL << (num_runs_shift / 2)) >= specialValues.size());
+    uint32_t index;
+    const uint64_t num_specials = specialValues.size();
+    const uint64_t total_special_pairs = num_specials * num_specials;
+    for (index = 0;
+         ((index + indx) < total_special_pairs) && index < num_elements;
+         index++)
+    {
+        input_ptr[0][index] = bitcast<uint16_t, InputTy>(
+            specialValues[(index + indx) % num_specials]);
+        input_ptr[1][index] = bitcast<uint16_t, InputTy>(
+            specialValues[(index + indx) / num_specials]);
+    }
+    for (; index + 1 < num_elements; index += 2)
+    {
+        cl_uint random = genrand_int32(d);
+        input_ptr[0][index] = bitcast<cl_ushort, InputTy>(random & 0xffff);
+        input_ptr[0][index + 1] = bitcast<cl_ushort, InputTy>(random >> 16);
+        random = genrand_int32(d);
+        input_ptr[1][index] = bitcast<cl_ushort, InputTy>(random & 0xffff);
+        input_ptr[1][index + 1] = bitcast<cl_ushort, InputTy>(random >> 16);
+    }
+    if (index < num_elements)
+    {
+        input_ptr[0][index] =
+            bitcast<cl_ushort, InputTy>(genrand_int32(d) & 0xffff);
+        input_ptr[1][index] =
+            bitcast<cl_ushort, InputTy>(genrand_int32(d) & 0xffff);
+    }
+}
+
+template <typename InputTy>
+void init_data_8bit(uint64_t indx, uint32_t num_elements, InputTy *input_ptr[])
+{
+    for (uint32_t j = 0; j < num_elements; j++)
+    {
+        cl_ushort bits = (indx + j) & 0xffff;
+        input_ptr[0][j] = bitcast<cl_uchar, InputTy>(bits & 0xff);
+        input_ptr[1][j] = bitcast<cl_uchar, InputTy>(bits >> 8);
+    }
+}
 
 // External verification and data generation functions
 extern const char *tests[];
 extern const char *test_names[];
-extern int verify_long(int test, size_t vector_size, cl_long *inptrA, cl_long *inptrB, cl_long *outptr, size_t n);
-extern void init_long_data(uint64_t indx, int num_elements, cl_long *input_ptr[], MTdata d) ;
-extern int verify_ulong(int test, size_t vector_size, cl_ulong *inptrA, cl_ulong *inptrB, cl_ulong *outptr, size_t n);
-extern void init_ulong_data(uint64_t indx, int num_elements, cl_ulong *input_ptr[], MTdata d) ;
-extern int verify_int(int test, size_t vector_size, cl_int *inptrA, cl_int *inptrB, cl_int *outptr, size_t n);
-extern void init_int_data(uint64_t indx, int num_elements, cl_int *input_ptr[], MTdata d) ;
-extern int verify_uint(int test, size_t vector_size, cl_uint *inptrA, cl_uint *inptrB, cl_uint *outptr, size_t n);
-extern void init_uint_data(uint64_t indx, int num_elements, cl_uint *input_ptr[], MTdata d) ;
-extern int verify_short(int test, size_t vector_size, cl_short *inptrA, cl_short *inptrB, cl_short *outptr, size_t n);
-extern void init_short_data(uint64_t indx, int num_elements, cl_short *input_ptr[], MTdata d) ;
-extern int verify_ushort(int test, size_t vector_size, cl_ushort *inptrA, cl_ushort *inptrB, cl_ushort *outptr, size_t n);
-extern void init_ushort_data(uint64_t indx, int num_elements, cl_ushort *input_ptr[], MTdata d) ;
-extern int verify_char(int test, size_t vector_size, cl_char *inptrA, cl_char *inptrB, cl_char *outptr, size_t n);
-extern void init_char_data(uint64_t indx, int num_elements, cl_char *input_ptr[], MTdata d) ;
-extern int verify_uchar(int test, size_t vector_size, cl_uchar *inptrA, cl_uchar *inptrB, cl_uchar *outptr, size_t n);
-extern void init_uchar_data(uint64_t indx, int num_elements, cl_uchar *input_ptr[], MTdata d) ;
+extern int verify_long(int test, size_t vector_size, cl_long *inptrA,
+                       cl_long *inptrB, cl_long *outptr, size_t n);
+extern int verify_ulong(int test, size_t vector_size, cl_ulong *inptrA,
+                        cl_ulong *inptrB, cl_ulong *outptr, size_t n);
+extern int verify_int(int test, size_t vector_size, cl_int *inptrA,
+                      cl_int *inptrB, cl_int *outptr, size_t n);
+extern int verify_uint(int test, size_t vector_size, cl_uint *inptrA,
+                       cl_uint *inptrB, cl_uint *outptr, size_t n);
+extern int verify_short(int test, size_t vector_size, cl_short *inptrA,
+                        cl_short *inptrB, cl_short *outptr, size_t n);
+extern int verify_ushort(int test, size_t vector_size, cl_ushort *inptrA,
+                         cl_ushort *inptrB, cl_ushort *outptr, size_t n);
+extern int verify_char(int test, size_t vector_size, cl_char *inptrA,
+                       cl_char *inptrB, cl_char *outptr, size_t n);
+extern int verify_uchar(int test, size_t vector_size, cl_uchar *inptrA,
+                        cl_uchar *inptrB, cl_uchar *outptr, size_t n);
 
 // Supported type list
 const ExplicitType types[] = {
@@ -634,29 +707,51 @@ test_integer_ops(cl_device_id deviceID, cl_context context,
         {
 
             switch (type) {
-                case     kChar:
-                    init_char_data(indx, num_elements * vectorSize, (cl_char**)(pThreadData->m_input_ptr), randDataIn);
+                case kChar:
+                    init_data_8bit<cl_char>(
+                        indx, num_elements * vectorSize,
+                        (cl_char **)(pThreadData->m_input_ptr));
                     break;
-                case     kUChar:
-                    init_uchar_data(indx, num_elements * vectorSize, (cl_uchar**)(pThreadData->m_input_ptr), randDataIn);
+                case kUChar:
+                    init_data_8bit<cl_uchar>(
+                        indx, num_elements * vectorSize,
+                        (cl_uchar **)(pThreadData->m_input_ptr));
                     break;
-                case     kShort:
-                    init_short_data(indx, num_elements * vectorSize, (cl_short**)(pThreadData->m_input_ptr), randDataIn);
+                case kShort:
+                    init_data_16bit<cl_short>(
+                        indx, num_elements * vectorSize,
+                        (cl_short **)(pThreadData->m_input_ptr), randDataIn,
+                        num_runs_shift);
                     break;
-                case     kUShort:
-                    init_ushort_data(indx, num_elements * vectorSize, (cl_ushort**)(pThreadData->m_input_ptr), randDataIn);
+                case kUShort:
+                    init_data_16bit<cl_ushort>(
+                        indx, num_elements * vectorSize,
+                        (cl_ushort **)(pThreadData->m_input_ptr), randDataIn,
+                        num_runs_shift);
                     break;
-                case     kInt:
-                    init_int_data(indx, num_elements * vectorSize, (cl_int**)(pThreadData->m_input_ptr), randDataIn);
+                case kInt:
+                    init_data<cl_int, uint32_t, cl_uint>(
+                        indx, num_elements * vectorSize,
+                        (cl_int **)(pThreadData->m_input_ptr), randDataIn,
+                        num_runs_shift, genrand_int32);
                     break;
-                case     kUInt:
-                    init_uint_data(indx, num_elements * vectorSize, (cl_uint**)(pThreadData->m_input_ptr), randDataIn);
+                case kUInt:
+                    init_data<cl_uint, uint32_t, cl_uint>(
+                        indx, num_elements * vectorSize,
+                        (cl_uint **)(pThreadData->m_input_ptr), randDataIn,
+                        num_runs_shift, genrand_int32);
                     break;
-                case     kLong:
-                    init_long_data(indx, num_elements * vectorSize, (cl_long**)(pThreadData->m_input_ptr), randDataIn);
+                case kLong:
+                    init_data<cl_long, uint64_t, cl_ulong>(
+                        indx, num_elements * vectorSize,
+                        (cl_long **)(pThreadData->m_input_ptr), randDataIn,
+                        num_runs_shift, genrand_int64);
                     break;
-                case     kULong:
-                    init_ulong_data(indx, num_elements * vectorSize, (cl_ulong**)(pThreadData->m_input_ptr), randDataIn);
+                case kULong:
+                    init_data<cl_ulong, uint64_t, cl_ulong>(
+                        indx, num_elements * vectorSize,
+                        (cl_ulong **)(pThreadData->m_input_ptr), randDataIn,
+                        num_runs_shift, genrand_int64);
                     break;
                 default:
                     err = 1;
@@ -664,6 +759,13 @@ test_integer_ops(cl_device_id deviceID, cl_context context,
                     break;
             }
 
+            if (auto definedOp = get_defined_arithmetic_op(tests[i]))
+            {
+                init_defined_arithmetic_data(
+                    type, *definedOp, num_elements * vectorSize,
+                    pThreadData->m_input_ptr[0], pThreadData->m_input_ptr[1],
+                    randDataIn);
+            }
 
             err = clEnqueueWriteBuffer(queue, pThreadData->m_streams[0], CL_FALSE, 0, pThreadData->m_type_size*num_elements * inputAVecSize, (void *)pThreadData->m_input_ptr[0], 0, NULL, NULL);
             test_error(err, "clEnqueueWriteBuffer failed");
@@ -824,11 +926,8 @@ int run_specific_test(cl_device_id deviceID, cl_context context, cl_command_queu
 int run_multiple_tests(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements, ExplicitType type, int num, int *tests, int total_tests) {
     int errors = 0;
 
-    if (getenv("CL_WIMPY_MODE") && num == LONG_MATH_SHIFT_SIZE) {
-      log_info("Detected CL_WIMPY_MODE env\n");
-      log_info("Skipping long test\n");
-      return 0;
-    }
+    if (gWimpyMode)
+        num = std::max(CHAR_MATH_SHIFT_SIZE, num - SHIFT_WIMPY_REDUCTION);
 
     int i;
     for (i=0; i<total_tests; i++)
@@ -887,400 +986,240 @@ int run_test(cl_device_id deviceID, cl_context context, cl_command_queue queue, 
 // -----------------
 // Long tests
 // -----------------
-int test_long_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(long_math)
+{
     if (!gHasLong)
     {
         log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
         return CL_SUCCESS;
     }
-    return run_test_math(deviceID, context, queue, num_elements, kLong, LONG_MATH_SHIFT_SIZE);
+    return run_test_math(device, context, queue, num_elements, kLong,
+                         LONG_MATH_SHIFT_SIZE);
 }
-int test_long_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(long_logic)
+{
     if (!gHasLong)
     {
         log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
         return CL_SUCCESS;
     }
-    return run_test_logic(deviceID, context, queue, num_elements, kLong, LONG_MATH_SHIFT_SIZE);
+    return run_test_logic(device, context, queue, num_elements, kLong,
+                          LONG_MATH_SHIFT_SIZE);
 }
-int test_long_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(long_shift)
+{
     if (!gHasLong)
     {
         log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
         return CL_SUCCESS;
     }
-    return run_test_shift(deviceID, context, queue, num_elements, kLong, LONG_MATH_SHIFT_SIZE);
+    return run_test_shift(device, context, queue, num_elements, kLong,
+                          LONG_MATH_SHIFT_SIZE);
 }
-int test_long_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(long_compare)
+{
     if (!gHasLong)
     {
         log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
         return CL_SUCCESS;
     }
-    return run_test_compare(deviceID, context, queue, num_elements, kLong, LONG_MATH_SHIFT_SIZE);
-}
-int test_quick_long_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test_math(deviceID, context, queue, num_elements, kLong, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_long_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test_logic(deviceID, context, queue, num_elements, kLong, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_long_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test_shift(deviceID, context, queue, num_elements, kLong, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_long_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test_compare(deviceID, context, queue, num_elements, kLong, QUICK_MATH_SHIFT_SIZE);
+    return run_test_compare(device, context, queue, num_elements, kLong,
+                            LONG_MATH_SHIFT_SIZE);
 }
 
 
 // -----------------
 // ULong tests
 // -----------------
-int test_ulong_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(ulong_math)
+{
     if (!gHasLong)
     {
         log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
         return CL_SUCCESS;
     }
-    return run_test_math(deviceID, context, queue, num_elements, kULong, LONG_MATH_SHIFT_SIZE);
+    return run_test_math(device, context, queue, num_elements, kULong,
+                         LONG_MATH_SHIFT_SIZE);
 }
-int test_ulong_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(ulong_logic)
+{
     if (!gHasLong)
     {
         log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
         return CL_SUCCESS;
     }
-    return run_test_logic(deviceID, context, queue, num_elements, kULong, LONG_MATH_SHIFT_SIZE);
+    return run_test_logic(device, context, queue, num_elements, kULong,
+                          LONG_MATH_SHIFT_SIZE);
 }
-int test_ulong_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(ulong_shift)
+{
     if (!gHasLong)
     {
         log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
         return CL_SUCCESS;
     }
-    return run_test_shift(deviceID, context, queue, num_elements, kULong, LONG_MATH_SHIFT_SIZE);
+    return run_test_shift(device, context, queue, num_elements, kULong,
+                          LONG_MATH_SHIFT_SIZE);
 }
-int test_ulong_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(ulong_compare)
+{
     if (!gHasLong)
     {
         log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
         return CL_SUCCESS;
     }
-    return run_test_compare(deviceID, context, queue, num_elements, kULong, LONG_MATH_SHIFT_SIZE);
-}
-int test_quick_ulong_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test_math(deviceID, context, queue, num_elements, kULong, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_ulong_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test_logic(deviceID, context, queue, num_elements, kULong, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_ulong_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test_shift(deviceID, context, queue, num_elements, kULong, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_ulong_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test_compare(deviceID, context, queue, num_elements, kULong, QUICK_MATH_SHIFT_SIZE);
+    return run_test_compare(device, context, queue, num_elements, kULong,
+                            LONG_MATH_SHIFT_SIZE);
 }
 
 
 // -----------------
 // Int tests
 // -----------------
-int test_int_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kInt, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(int_math)
+{
+    return run_test_math(device, context, queue, num_elements, kInt,
+                         INT_MATH_SHIFT_SIZE);
 }
-int test_int_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kInt, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(int_logic)
+{
+    return run_test_logic(device, context, queue, num_elements, kInt,
+                          INT_MATH_SHIFT_SIZE);
 }
-int test_int_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kInt, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(int_shift)
+{
+    return run_test_shift(device, context, queue, num_elements, kInt,
+                          INT_MATH_SHIFT_SIZE);
 }
-int test_int_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kInt, LONG_MATH_SHIFT_SIZE);
-}
-int test_quick_int_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kInt, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_int_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kInt, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_int_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kInt, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_int_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kInt, QUICK_MATH_SHIFT_SIZE);
+REGISTER_TEST(int_compare)
+{
+    return run_test_compare(device, context, queue, num_elements, kInt,
+                            INT_MATH_SHIFT_SIZE);
 }
 
 
 // -----------------
 // UInt tests
 // -----------------
-int test_uint_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kUInt, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(uint_math)
+{
+    return run_test_math(device, context, queue, num_elements, kUInt,
+                         INT_MATH_SHIFT_SIZE);
 }
-int test_uint_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kUInt, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(uint_logic)
+{
+    return run_test_logic(device, context, queue, num_elements, kUInt,
+                          INT_MATH_SHIFT_SIZE);
 }
-int test_uint_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kUInt, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(uint_shift)
+{
+    return run_test_shift(device, context, queue, num_elements, kUInt,
+                          INT_MATH_SHIFT_SIZE);
 }
-int test_uint_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kUInt, LONG_MATH_SHIFT_SIZE);
-}
-int test_quick_uint_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kUInt, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_uint_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kUInt, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_uint_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kUInt, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_uint_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kUInt, QUICK_MATH_SHIFT_SIZE);
+REGISTER_TEST(uint_compare)
+{
+    return run_test_compare(device, context, queue, num_elements, kUInt,
+                            INT_MATH_SHIFT_SIZE);
 }
 
 
 // -----------------
 // Short tests
 // -----------------
-int test_short_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kShort, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(short_math)
+{
+    return run_test_math(device, context, queue, num_elements, kShort,
+                         SHORT_MATH_SHIFT_SIZE);
 }
-int test_short_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kShort, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(short_logic)
+{
+    return run_test_logic(device, context, queue, num_elements, kShort,
+                          SHORT_MATH_SHIFT_SIZE);
 }
-int test_short_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kShort, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(short_shift)
+{
+    return run_test_shift(device, context, queue, num_elements, kShort,
+                          SHORT_MATH_SHIFT_SIZE);
 }
-int test_short_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kShort, LONG_MATH_SHIFT_SIZE);
-}
-int test_quick_short_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kShort, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_short_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kShort, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_short_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kShort, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_short_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kShort, QUICK_MATH_SHIFT_SIZE);
+REGISTER_TEST(short_compare)
+{
+    return run_test_compare(device, context, queue, num_elements, kShort,
+                            SHORT_MATH_SHIFT_SIZE);
 }
 
 
 // -----------------
 // UShort tests
 // -----------------
-int test_ushort_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kUShort, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(ushort_math)
+{
+    return run_test_math(device, context, queue, num_elements, kUShort,
+                         SHORT_MATH_SHIFT_SIZE);
 }
-int test_ushort_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kUShort, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(ushort_logic)
+{
+    return run_test_logic(device, context, queue, num_elements, kUShort,
+                          SHORT_MATH_SHIFT_SIZE);
 }
-int test_ushort_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kUShort, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(ushort_shift)
+{
+    return run_test_shift(device, context, queue, num_elements, kUShort,
+                          SHORT_MATH_SHIFT_SIZE);
 }
-int test_ushort_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kUShort, LONG_MATH_SHIFT_SIZE);
-}
-int test_quick_ushort_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kUShort, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_ushort_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kUShort, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_ushort_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kUShort, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_ushort_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kUShort, QUICK_MATH_SHIFT_SIZE);
+REGISTER_TEST(ushort_compare)
+{
+    return run_test_compare(device, context, queue, num_elements, kUShort,
+                            SHORT_MATH_SHIFT_SIZE);
 }
 
 
 // -----------------
 // Char tests
 // -----------------
-int test_char_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kChar, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(char_math)
+{
+    return run_test_math(device, context, queue, num_elements, kChar,
+                         CHAR_MATH_SHIFT_SIZE);
 }
-int test_char_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kChar, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(char_logic)
+{
+    return run_test_logic(device, context, queue, num_elements, kChar,
+                          CHAR_MATH_SHIFT_SIZE);
 }
-int test_char_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kChar, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(char_shift)
+{
+    return run_test_shift(device, context, queue, num_elements, kChar,
+                          CHAR_MATH_SHIFT_SIZE);
 }
-int test_char_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kChar, LONG_MATH_SHIFT_SIZE);
-}
-int test_quick_char_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kChar, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_char_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kChar, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_char_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kChar, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_char_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kChar, QUICK_MATH_SHIFT_SIZE);
+REGISTER_TEST(char_compare)
+{
+    return run_test_compare(device, context, queue, num_elements, kChar,
+                            CHAR_MATH_SHIFT_SIZE);
 }
 
 
 // -----------------
 // UChar tests
 // -----------------
-int test_uchar_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kUChar, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(uchar_math)
+{
+    return run_test_math(device, context, queue, num_elements, kUChar,
+                         CHAR_MATH_SHIFT_SIZE);
 }
-int test_uchar_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kUChar, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(uchar_logic)
+{
+    return run_test_logic(device, context, queue, num_elements, kUChar,
+                          CHAR_MATH_SHIFT_SIZE);
 }
-int test_uchar_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kUChar, LONG_MATH_SHIFT_SIZE);
+REGISTER_TEST(uchar_shift)
+{
+    return run_test_shift(device, context, queue, num_elements, kUChar,
+                          CHAR_MATH_SHIFT_SIZE);
 }
-int test_uchar_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kUChar, LONG_MATH_SHIFT_SIZE);
-}
-int test_quick_uchar_math(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_math(deviceID, context, queue, num_elements, kUChar, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_uchar_logic(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_logic(deviceID, context, queue, num_elements, kUChar, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_uchar_shift(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_shift(deviceID, context, queue, num_elements, kUChar, QUICK_MATH_SHIFT_SIZE);
-}
-int test_quick_uchar_compare(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test_compare(deviceID, context, queue, num_elements, kUChar, QUICK_MATH_SHIFT_SIZE);
-}
-
-
-
-// These are kept for debugging if you want to run all the tests together.
-
-int test_long(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test(deviceID, context, queue, num_elements, kLong, LONG_MATH_SHIFT_SIZE);
-}
-
-int test_quick_long(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test(deviceID, context, queue, num_elements, kLong, QUICK_MATH_SHIFT_SIZE);
-}
-
-int test_ulong(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test(deviceID, context, queue, num_elements, kULong, LONG_MATH_SHIFT_SIZE);
-}
-
-int test_quick_ulong(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    if (!gHasLong)
-    {
-        log_info( "WARNING: 64 bit integers are not supported on this device. Skipping\n" );
-        return CL_SUCCESS;
-    }
-    return run_test(deviceID, context, queue, num_elements, kULong, QUICK_MATH_SHIFT_SIZE);
-}
-
-int test_int(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kInt, LONG_MATH_SHIFT_SIZE);
-}
-
-int test_quick_int(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kInt, QUICK_MATH_SHIFT_SIZE);
-}
-
-int test_uint(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kUInt, LONG_MATH_SHIFT_SIZE);
-}
-
-int test_quick_uint(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kUInt, QUICK_MATH_SHIFT_SIZE);
-}
-
-int test_short(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kShort, LONG_MATH_SHIFT_SIZE);
-}
-
-int test_quick_short(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kShort, QUICK_MATH_SHIFT_SIZE);
-}
-
-int test_ushort(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kUShort, LONG_MATH_SHIFT_SIZE);
-}
-
-int test_quick_ushort(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kUShort, QUICK_MATH_SHIFT_SIZE);
-}
-
-int test_char(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kChar, LONG_MATH_SHIFT_SIZE);
-}
-
-int test_quick_char(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kChar, QUICK_MATH_SHIFT_SIZE);
-}
-
-int test_uchar(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kUChar, LONG_MATH_SHIFT_SIZE);
-}
-
-int test_quick_uchar(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
-    return run_test(deviceID, context, queue, num_elements, kUChar, QUICK_MATH_SHIFT_SIZE);
+REGISTER_TEST(uchar_compare)
+{
+    return run_test_compare(device, context, queue, num_elements, kUChar,
+                            CHAR_MATH_SHIFT_SIZE);
 }
 
 // Prototype for below
@@ -1334,7 +1273,7 @@ int run_vector_scalar_tests( cl_device_id deviceID, cl_context context, cl_comma
     return errors;
 }
 
-int test_vector_scalar(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(vector_scalar)
 {
     int errors = 0;
     int numTypes = sizeof( types ) / sizeof( types[ 0 ] );
@@ -1344,7 +1283,8 @@ int test_vector_scalar(cl_device_id deviceID, cl_context context, cl_command_que
         if ((types[ t ] == kLong || types[ t ] == kULong) && !gHasLong)
             continue;
 
-        errors += run_vector_scalar_tests( deviceID, context, queue, num_elements, types[ t ], 1 );
+        errors += run_vector_scalar_tests(device, context, queue, num_elements,
+                                          types[t], 1);
         break;
     }
 

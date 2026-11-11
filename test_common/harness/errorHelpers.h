@@ -61,6 +61,21 @@ static int vlog_win32(const char *format, ...);
         log_error(msg, ##__VA_ARGS__);                                         \
         return TEST_FAIL;                                                      \
     }
+#define test_fail_and_cleanup(errRet, cleanup, msg, ...)                       \
+    {                                                                          \
+        log_error(msg, ##__VA_ARGS__);                                         \
+        errRet = TEST_FAIL;                                                    \
+        goto cleanup;                                                          \
+    }
+#define test_error_and_cleanup(errCode, cleanup, msg, ...)                     \
+    {                                                                          \
+        auto errCodeResult = errCode;                                          \
+        if (errCodeResult != CL_SUCCESS)                                       \
+        {                                                                      \
+            print_error(errCodeResult, msg);                                   \
+            goto cleanup;                                                      \
+        }                                                                      \
+    }
 #define test_error(errCode, msg) test_error_ret(errCode, msg, errCode)
 #define test_error_fail(errCode, msg) test_error_ret(errCode, msg, TEST_FAIL)
 #define test_error_ret(errCode, msg, retValue)                                 \
@@ -104,6 +119,12 @@ static int vlog_win32(const char *format, ...);
             print_failure_error(errCode, expectedErrCode, msg);                \
             return retValue;                                                   \
         }                                                                      \
+    }
+#define test_object_failure_ret(object, errCode, expectedErrCode, msg,         \
+                                retValue)                                      \
+    {                                                                          \
+        test_assert_error_ret(object == nullptr, msg, retValue);               \
+        test_failure_error_ret(errCode, expectedErrCode, msg, retValue);       \
     }
 #define print_failure_error(errCode, expectedErrCode, msg)                     \
     log_error("ERROR: %s! (Got %s, expected %s from %s:%d)\n", msg,            \
@@ -153,9 +174,24 @@ static int vlog_win32(const char *format, ...);
         }                                                                      \
     } while (0)
 
+#define test_assert_event_status(comparison_operator, event)                   \
+    do                                                                         \
+    {                                                                          \
+        cl_int status;                                                         \
+        cl_int err = clGetEventInfo(event, CL_EVENT_COMMAND_EXECUTION_STATUS,  \
+                                    sizeof(status), &status, nullptr);         \
+        test_error(err, "Could not get " #event " info");                      \
+        test_assert_error(status comparison_operator CL_COMPLETE,              \
+                          "Unexpected status for " #event);                    \
+    } while (false)
+
+#define test_assert_event_inprogress(event) test_assert_event_status(>, event)
+#define test_assert_event_terminated(event) test_assert_event_status(<, event)
+#define test_assert_event_complete(event) test_assert_event_status(==, event)
+
 extern const char *IGetErrorString(int clErrorCode);
 
-extern float Ulp_Error_Half(cl_half test, float reference);
+extern float Ulp_Error_Half(cl_half test, double reference);
 extern float Ulp_Error(float test, double reference);
 extern float Ulp_Error_Double(double test, long double reference);
 
@@ -167,13 +203,15 @@ extern const char *GetAddressModeName(cl_addressing_mode mode);
 extern const char *GetQueuePropertyName(cl_command_queue_properties properties);
 
 extern const char *GetDeviceTypeName(cl_device_type type);
+extern const char *GetImageTypeName(cl_mem_object_type type);
 bool check_functions_for_offline_compiler(const char *subtestname);
+cl_int OutputBuildLog(cl_program program, const cl_device_id device);
 cl_int OutputBuildLogs(cl_program program, cl_uint num_devices,
                        cl_device_id *device_list);
 
 // NON-REENTRANT UNLESS YOU PROVIDE A BUFFER PTR (pass null to use static
 // storage, but it's not reentrant then!)
-extern const char *GetDataVectorString(void *dataBuffer, size_t typeSize,
+extern const char *GetDataVectorString(const void *dataBuffer, size_t typeSize,
                                        size_t vecSize, char *buffer);
 
 #if defined(_WIN32) && !defined(__MINGW32__)

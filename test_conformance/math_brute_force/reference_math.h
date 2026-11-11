@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2017 The Khronos Group Inc.
+// Copyright (c) 2017-2024 The Khronos Group Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <OpenCL/opencl.h>
 #else
 #include <CL/cl.h>
+#include "CL/cl_half.h"
 #endif
 
 // --  for testing float --
@@ -63,6 +64,7 @@ double reference_modf(double, double* n);
 double reference_fdim(double, double);
 double reference_add(double, double);
 double reference_subtract(double, double);
+double reference_negation(double v);
 double reference_divide(double, double);
 double reference_multiply(double, double);
 double reference_remquo(double, double, int*);
@@ -87,8 +89,8 @@ double reference_acosh(double x);
 double reference_asinh(double x);
 double reference_atanh(double x);
 double reference_cbrt(double x);
-float reference_copysign(float x, float y);
-double reference_copysignd(double x, double y);
+float reference_copysignf(float x, float y);
+double reference_copysign(double x, double y);
 double reference_exp10(double);
 double reference_exp2(double x);
 double reference_expm1(double x);
@@ -115,6 +117,11 @@ double reference_ldexp(double x, int n);
 
 double reference_assignment(double x);
 int reference_not(double x);
+
+double reference_erfc(double x);
+double reference_erf(double x);
+double reference_tgamma(double x);
+
 // -- for testing fast-relaxed
 
 double reference_relaxed_acos(double);
@@ -160,6 +167,8 @@ long double reference_fractl(long double, long double*);
 long double reference_fmal(long double, long double, long double);
 long double reference_madl(long double, long double, long double);
 long double reference_nextafterl(long double, long double);
+float reference_nextafterh(float, float, bool allow_denormals = true);
+cl_half reference_nanh(cl_ushort);
 long double reference_recipl(long double);
 long double reference_rootnl(long double, int);
 long double reference_rsqrtl(long double);
@@ -180,6 +189,7 @@ long double reference_modfl(long double, long double* n);
 long double reference_fdiml(long double, long double);
 long double reference_addl(long double, long double);
 long double reference_subtractl(long double, long double);
+long double reference_negationl(long double);
 long double reference_dividel(long double, long double);
 long double reference_multiplyl(long double, long double);
 long double reference_remquol(long double, long double, int*);
@@ -232,5 +242,9 @@ long double reference_ldexpl(long double x, int n);
 
 long double reference_assignmentl(long double x);
 int reference_notl(long double x);
+
+long double reference_erfcl(long double x);
+long double reference_erfl(long double x);
+long double reference_tgammal(long double x);
 
 #endif

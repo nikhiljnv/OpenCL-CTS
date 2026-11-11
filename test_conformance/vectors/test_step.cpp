@@ -26,6 +26,15 @@
 
 #include "type_replacer.h"
 
+// vec_step depends only on its argument's type, so one work-item is sufficient.
+constexpr size_t STEP_WORK_ITEMS = 1;
+
+// Accommodate one instance of the widest tested type.
+constexpr size_t STEP_INPUT_BUFFER_SIZE = sizeof(cl_double16);
+
+// Store one cl_int result.
+constexpr size_t STEP_OUTPUT_BUFFER_SIZE = sizeof(cl_int);
+
 
 /*
  test_step_type,
@@ -45,8 +54,8 @@ int test_step_internal(cl_device_id deviceID, cl_context context,
     char tempBuffer[2048];
 
     clState* pClState = newClState(deviceID, context, queue);
-    bufferStruct* pBuffers =
-        newBufferStruct(BUFFER_SIZE, BUFFER_SIZE, pClState);
+    bufferStruct* pBuffers = newBufferStruct(STEP_INPUT_BUFFER_SIZE,
+                                             STEP_OUTPUT_BUFFER_SIZE, pClState);
 
     if (pBuffers == NULL)
     {
@@ -55,19 +64,18 @@ int test_step_internal(cl_device_id deviceID, cl_context context,
         return -1;
     }
 
-    // detect whether profile of the device is embedded
-    char profile[1024] = "";
-    err = clGetDeviceInfo(deviceID, CL_DEVICE_PROFILE, sizeof(profile), profile,
-                          NULL);
-    if (err)
-    {
-        print_error(err, "clGetDeviceInfo for CL_DEVICE_PROFILE failed\n");
-        return -1;
-    }
-    gIsEmbedded = NULL != strstr(profile, "EMBEDDED_PROFILE");
-
     for (typeIdx = 0; types[typeIdx] != kNumExplicitTypes; ++typeIdx)
     {
+        if (types[typeIdx] == kHalf)
+        {
+            // If we're testing halfs, we need to check for support first
+            if (!is_extension_available(deviceID, "cl_khr_fp16"))
+            {
+                log_info("Not testing halfs (unsupported on this device)\n");
+                continue;
+            }
+        }
+
         if (types[typeIdx] == kDouble)
         {
             // If we're testing doubles, we need to check for support first
@@ -96,6 +104,8 @@ int test_step_internal(cl_device_id deviceID, cl_context context,
         doSingleReplace(tempBuffer, 2048, pattern, ".EXTENSIONS.",
                         types[typeIdx] == kDouble
                             ? "#pragma OPENCL EXTENSION cl_khr_fp64 : enable"
+                            : types[typeIdx] == kHalf
+                            ? "#pragma OPENCL EXTENSION cl_khr_fp16 : enable"
                             : "");
 
         for (vecSizeIdx = 0; vecSizeIdx < NUM_VECTOR_SIZES; ++vecSizeIdx)
@@ -109,7 +119,7 @@ int test_step_internal(cl_device_id deviceID, cl_context context,
                 vlog_error("%s: failed to fill source buf for type %s%s\n",
                            testName, g_arrTypeNames[typeIdx],
                            g_arrVecSizeNames[vecSizeIdx]);
-                destroyBufferStruct(pBuffers, pClState);
+                destroyBufferStruct(pBuffers);
                 destroyClState(pClState);
                 return -1;
             }
@@ -119,7 +129,7 @@ int test_step_internal(cl_device_id deviceID, cl_context context,
             {
                 vlog_error("%s: Error compiling \"\n%s\n\"", testName,
                            srcBuffer);
-                destroyBufferStruct(pBuffers, pClState);
+                destroyBufferStruct(pBuffers);
                 destroyClState(pClState);
                 return -1;
             }
@@ -130,19 +140,19 @@ int test_step_internal(cl_device_id deviceID, cl_context context,
                 vlog_error("%s: failed to push args %s%s\n", testName,
                            g_arrTypeNames[typeIdx],
                            g_arrVecSizeNames[vecSizeIdx]);
-                destroyBufferStruct(pBuffers, pClState);
+                destroyBufferStruct(pBuffers);
                 destroyClState(pClState);
                 return -1;
             }
 
             // now we run the kernel
-            err = runKernel(pClState, 1024);
+            err = runKernel(pClState, STEP_WORK_ITEMS);
             if (err != 0)
             {
-                vlog_error("%s: runKernel fail (%ld threads) %s%s\n", testName,
+                vlog_error("%s: runKernel fail (%zu threads) %s%s\n", testName,
                            pClState->m_numThreads, g_arrTypeNames[typeIdx],
                            g_arrVecSizeNames[vecSizeIdx]);
-                destroyBufferStruct(pBuffers, pClState);
+                destroyBufferStruct(pBuffers);
                 destroyClState(pClState);
                 return -1;
             }
@@ -153,13 +163,12 @@ int test_step_internal(cl_device_id deviceID, cl_context context,
                 vlog_error("%s: failed to retrieve results %s%s\n", testName,
                            g_arrTypeNames[typeIdx],
                            g_arrVecSizeNames[vecSizeIdx]);
-                destroyBufferStruct(pBuffers, pClState);
+                destroyBufferStruct(pBuffers);
                 destroyClState(pClState);
                 return -1;
             }
 
             err = checkCorrectnessStep(pBuffers, pClState,
-                                       g_arrTypeSizes[typeIdx],
                                        g_arrVecSizes[vecSizeIdx]);
 
             if (err != 0)
@@ -168,14 +177,16 @@ int test_step_internal(cl_device_id deviceID, cl_context context,
                            g_arrTypeNames[typeIdx],
                            g_arrVecSizeNames[vecSizeIdx]);
                 vlog_error("%s: Source was \"\n%s\n\"", testName, srcBuffer);
-                destroyBufferStruct(pBuffers, pClState);
+                destroyBufferStruct(pBuffers);
                 destroyClState(pClState);
                 return -1;
             }
+
+            clStateDestroyProgramAndKernel(pClState);
         }
     }
 
-    destroyBufferStruct(pBuffers, pClState);
+    destroyBufferStruct(pBuffers);
 
     destroyClState(pClState);
 
@@ -231,30 +242,26 @@ static const char* patterns[] = {
  test_step_typedef_var,
  */
 
-int test_step_type(cl_device_id deviceID, cl_context context,
-                   cl_command_queue queue, int num_elements)
+REGISTER_TEST(step_type)
 {
-    return test_step_internal(deviceID, context, queue, patterns[0],
+    return test_step_internal(device, context, queue, patterns[0],
                               "test_step_type");
 }
 
-int test_step_var(cl_device_id deviceID, cl_context context,
-                  cl_command_queue queue, int num_elements)
+REGISTER_TEST(step_var)
 {
-    return test_step_internal(deviceID, context, queue, patterns[1],
+    return test_step_internal(device, context, queue, patterns[1],
                               "test_step_var");
 }
 
-int test_step_typedef_type(cl_device_id deviceID, cl_context context,
-                           cl_command_queue queue, int num_elements)
+REGISTER_TEST(step_typedef_type)
 {
-    return test_step_internal(deviceID, context, queue, patterns[2],
+    return test_step_internal(device, context, queue, patterns[2],
                               "test_step_typedef_type");
 }
 
-int test_step_typedef_var(cl_device_id deviceID, cl_context context,
-                          cl_command_queue queue, int num_elements)
+REGISTER_TEST(step_typedef_var)
 {
-    return test_step_internal(deviceID, context, queue, patterns[3],
+    return test_step_internal(device, context, queue, patterns[3],
                               "test_step_typedef_var");
 }

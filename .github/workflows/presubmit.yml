@@ -3,38 +3,246 @@ on: [push, pull_request]
 
 jobs:
   build:
-    name: Build ${{ matrix.os }} ${{ matrix.name }}
+    name: Build ${{ matrix.os }} ${{ matrix.arch }}${{ matrix.extra }}
     runs-on: ${{ matrix.os }}
-    env:
-      JOB_ARCHITECTURE: ${{ matrix.arch }}
-      JOB_ENABLE_GL: ${{ matrix.gl }}
     strategy:
+      fail-fast: false
       matrix:
-        mainmatrix: [true]
-        os: [ubuntu-20.04, macos-latest]
+        build-type: [Release]
+        gl: [0]
+        os: [ubuntu-22.04, macos-latest, windows-latest, windows-11-arm]
         include:
-          - os: ubuntu-20.04
-            mainmatrix: true
+          - os: ubuntu-22.04
             gl: 1
-          - os: ubuntu-20.04
-            mainmatrix: false
-            name: Arm
+            extra: " gl"
+          - os: ubuntu-22.04
             arch: arm
-          - os: ubuntu-20.04
-            mainmatrix: false
-            name: AArch64
+          - os: ubuntu-22.04
             arch: aarch64
+            build-type: Debug
+            extra: " debug"
+          - os: ubuntu-22.04
+            arch: android-arm
+            android_arch_abi: armeabi-v7a
+          - os: ubuntu-22.04
+            arch: android-aarch64
+            android_arch_abi: arm64-v8a
     steps:
-      - uses: actions/checkout@v2
-      - name: Build
-        run: ./presubmit.sh
+      - uses: actions/checkout@v7
+      - name: Install Arm and AArch64 compilers
+        if: ${{ matrix.arch == 'arm' || matrix.arch == 'aarch64' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-12-arm-linux-gnueabihf g++-12-arm-linux-gnueabihf \
+            gcc-12-aarch64-linux-gnu g++-12-aarch64-linux-gnu
+          sudo update-alternatives --install /usr/bin/arm-linux-gnueabihf-gcc arm-linux-gnueabihf-gcc /usr/bin/arm-linux-gnueabihf-gcc-12 12
+          sudo update-alternatives --install /usr/bin/arm-linux-gnueabihf-g++ arm-linux-gnueabihf-g++ /usr/bin/arm-linux-gnueabihf-g++-12 12
+          sudo update-alternatives --install /usr/bin/aarch64-linux-gnu-gcc aarch64-linux-gnu-gcc /usr/bin/aarch64-linux-gnu-gcc-12 12
+          sudo update-alternatives --install /usr/bin/aarch64-linux-gnu-g++ aarch64-linux-gnu-g++ /usr/bin/aarch64-linux-gnu-g++-12 12
+      - name: Setup OpenGL build dependencies
+        if: ${{ matrix.gl }}
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install libglu1-mesa-dev freeglut3-dev mesa-common-dev libglew-dev
+      - name: Setup MSVC with Ninja
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          variant: sccache
+          key: ${{ matrix.os }}-${{ matrix.arch }}
+      - name: Fetch OpenCL Headers
+        shell: bash
+        run: |
+          git clone https://github.com/KhronosGroup/OpenCL-Headers.git
+          cd OpenCL-Headers
+          ln -s CL OpenCL # For OSX builds
+          cd ..
+      - name: Fetch SPIR-V Headers
+        shell: bash
+        run: |
+          git clone https://github.com/KhronosGroup/SPIRV-Headers.git
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@main
+        with:
+          version: 1.4.309.0
+          cache: true
+      - name: Install Android NDK
+        if: ${{ matrix.arch == 'android-arm' || matrix.arch == 'android-aarch64' }}
+        run: |
+          wget https://dl.google.com/android/repository/android-ndk-r28c-linux.zip -O android-ndk.zip
+          unzip android-ndk.zip -d $HOME
+          export ANDROID_NDK=$HOME/android-ndk-r28c
+          echo "ANDROID_NDK=$ANDROID_NDK" >> $GITHUB_ENV
+          export ANDROID_ARCH_ABI=${{ matrix.android_arch_abi }}
+          echo "ANDROID_ARCH_ABI=$ANDROID_ARCH_ABI" >> $GITHUB_ENV
+          echo "ANDROID_PLATFORM=29" >> $GITHUB_ENV
+      - name: Prepare CMake Toolchain file
+        shell: bash
+        run: |
+          if [[ '${{ matrix.arch }}' == android-* ]]; then
+              TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake
+          else
+              TOOLCHAIN_FILE='${{ github.workspace }}'/toolchain.cmake
+              touch ${TOOLCHAIN_FILE}
+          fi
+
+          TOOLCHAIN_PREFIX_arm=arm-linux-gnueabihf
+          TOOLCHAIN_PREFIX_aarch64=aarch64-linux-gnu
+
+          if [[ '${{ matrix.arch }}' != android-* ]]; then
+            if [[ '${{ matrix.arch }}' != "" && ${RUNNER_OS} != "Windows" ]]; then
+              TOOLCHAIN_PREFIX_VAR=TOOLCHAIN_PREFIX_${{ matrix.arch }}
+              TOOLCHAIN_PREFIX=${!TOOLCHAIN_PREFIX_VAR}
+
+              echo "SET(CMAKE_SYSTEM_NAME Linux)" >> ${TOOLCHAIN_FILE}
+              echo "SET(CMAKE_SYSTEM_PROCESSOR ${{ matrix.arch }})" >> ${TOOLCHAIN_FILE}
+              echo "SET(CMAKE_C_COMPILER   ${TOOLCHAIN_PREFIX}-gcc)" >> ${TOOLCHAIN_FILE}
+              echo "SET(CMAKE_CXX_COMPILER ${TOOLCHAIN_PREFIX}-g++)" >> ${TOOLCHAIN_FILE}
+              echo "SET(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)" >> ${TOOLCHAIN_FILE}
+              echo "SET(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)" >> ${TOOLCHAIN_FILE}
+              echo "SET(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)" >> ${TOOLCHAIN_FILE}
+            fi
+          fi
+          echo "TOOLCHAIN_FILE=${TOOLCHAIN_FILE}" >> $GITHUB_ENV
+      - name: Prepare Android CMake arguments
+        if: ${{ matrix.arch == 'android-arm' || matrix.arch == 'android-aarch64' }}
+        shell: bash
+        run: |
+          echo "CMAKE_ADDITIONAL_CONFIG_ARGS=-DCMAKE_ANDROID_ARCH_ABI=${ANDROID_ARCH_ABI} -DANDROID_PLATFORM=${ANDROID_PLATFORM}" >> $GITHUB_ENV
+      - name: Fetch and build OpenCL ICD Loader
+        shell: bash
+        run: |
+          git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader.git
+          cd OpenCL-ICD-Loader
+          mkdir build
+          cd build
+          cmake .. -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_FILE} \
+                -DOPENCL_ICD_LOADER_HEADERS_DIR='${{ github.workspace }}'/OpenCL-Headers/ \
+                ${CMAKE_ADDITIONAL_CONFIG_ARGS}
+          cmake --build . --parallel
+      - name: Fetch Vulkan Headers
+        shell: bash
+        run: |
+          git clone https://github.com/KhronosGroup/Vulkan-Headers.git
+      - name: Fetch and build Vulkan Loader
+        if: ${{ matrix.arch != 'android-arm' && matrix.arch != 'android-aarch64' }}
+        shell: bash
+        run: |
+          git clone https://github.com/KhronosGroup/Vulkan-Loader.git
+          cd Vulkan-Loader
+          mkdir build
+          cd build
+          python3 ../scripts/update_deps.py
+          cmake .. -G Ninja \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_FILE} \
+                -DBUILD_WSI_XLIB_SUPPORT=OFF \
+                -DBUILD_WSI_XCB_SUPPORT=OFF \
+                -DBUILD_WSI_WAYLAND_SUPPORT=OFF \
+                -C helper.cmake ..
+          cmake --build . --parallel
+      - name: Configure and build
+        shell: bash
+        run: |
+          mkdir build
+          cd build
+          if [[ ${RUNNER_OS} == "Windows" ]]; then
+              CMAKE_OPENCL_LIBRARIES_OPTION="OpenCL"
+              CMAKE_ADDITIONAL_CONFIG_ARGS="-DD3D10_IS_SUPPORTED=ON -DD3D11_IS_SUPPORTED=ON"
+          else
+              CMAKE_OPENCL_LIBRARIES_OPTION="-lOpenCL"
+              if [[ '${{ matrix.arch }}' != android-* ]]; then
+                  CMAKE_OPENCL_LIBRARIES_OPTION="${CMAKE_OPENCL_LIBRARIES_OPTION} -lpthread"
+              fi
+          fi
+          cmake .. -G Ninja \
+                -DCMAKE_BUILD_TYPE=${{ matrix.build-type }} \
+                -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+                -DCL_INCLUDE_DIR='${{ github.workspace }}'/OpenCL-Headers \
+                -DSPIRV_INCLUDE_DIR='${{ github.workspace }}'/SPIRV-Headers \
+                -DCL_LIB_DIR='${{ github.workspace }}'/OpenCL-ICD-Loader/build \
+                -DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN_FILE} \
+                -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=./bin \
+                -DOPENCL_LIBRARIES="${CMAKE_OPENCL_LIBRARIES_OPTION}" \
+                -DUSE_CL_EXPERIMENTAL=ON \
+                -DGL_IS_SUPPORTED=${{ matrix.gl }} \
+                -DVULKAN_IS_SUPPORTED=ON \
+                -DVULKAN_INCLUDE_DIR='${{ github.workspace }}'/Vulkan-Headers/include/ \
+                -DVULKAN_LIB_DIR='${{ github.workspace }}'/Vulkan-Loader/build/loader/ \
+                ${CMAKE_ADDITIONAL_CONFIG_ARGS}
+          cmake --build . --parallel
+
+  build-windows-msys2:
+    name: Build windows-latest msys2 mingw64 gcc
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-git
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-python
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          variant: sccache
+          key: windows-latest-msys2
+      - name: Fetch dependencies
+        run: |
+          git clone https://github.com/KhronosGroup/OpenCL-Headers.git
+          git clone https://github.com/KhronosGroup/SPIRV-Headers.git
+          git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader.git
+          git clone https://github.com/KhronosGroup/SPIRV-Tools.git
+          git clone https://github.com/KhronosGroup/SPIRV-Headers.git SPIRV-Tools/external/spirv-headers
+          git clone https://github.com/google/effcee.git SPIRV-Tools/external/effcee
+          git clone https://github.com/google/re2.git SPIRV-Tools/external/re2
+      - name: Build OpenCL ICD Loader
+        run: |
+          cmake -S OpenCL-ICD-Loader -B OpenCL-ICD-Loader/build -G Ninja \
+                -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+                -DOPENCL_ICD_LOADER_HEADERS_DIR=$PWD/OpenCL-Headers
+          cmake --build OpenCL-ICD-Loader/build --config Release
+      - name: Build SPIRV-Tools
+        run: |
+          cmake -S SPIRV-Tools -B SPIRV-Tools/build -G Ninja -DSPIRV_SKIP_TESTS=ON \
+                -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build SPIRV-Tools/build --config Release
+      - name: Configure and build CTS
+        run: |
+          cmake -S . -B build -G Ninja \
+                -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+                -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+                -DCL_INCLUDE_DIR=$PWD/OpenCL-Headers \
+                -DCL_LIB_DIR=$PWD/OpenCL-ICD-Loader/build \
+                -DSPIRV_INCLUDE_DIR=$PWD/SPIRV-Headers \
+                -DSPIRV_TOOLS_DIR=$PWD/SPIRV-Tools/build/tools \
+                -DOPENCL_LIBRARIES=OpenCL
+          cmake --build build --config Release
+
   formatcheck:
     name: Check code format
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Install packages
-        run: sudo apt install -y clang-format clang-format-9
-      - uses: actions/checkout@v2
+        run: sudo apt install -y clang-format clang-format-14
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Check code format

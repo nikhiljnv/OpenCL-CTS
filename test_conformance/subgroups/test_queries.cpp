@@ -13,7 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "procs.h"
 #include "subhelpers.h"
 
 typedef struct
@@ -100,7 +99,7 @@ int test_sub_group_info(cl_device_id device, cl_context context,
         subgroupsApiSet.clGetKernelSubGroupInfo_ptr();
     if (clGetKernelSubGroupInfo_ptr == NULL)
     {
-        log_error("ERROR: %s function not available",
+        log_error("ERROR: %s function not available\n",
                   subgroupsApiSet.clGetKernelSubGroupInfo_name);
         return TEST_FAIL;
     }
@@ -112,7 +111,7 @@ int test_sub_group_info(cl_device_id device, cl_context context,
     if (error != CL_SUCCESS)
     {
         log_error("ERROR: %s function error for "
-                  "CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE",
+                  "CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE\n",
                   subgroupsApiSet.clGetKernelSubGroupInfo_name);
         return TEST_FAIL;
     }
@@ -133,7 +132,7 @@ int test_sub_group_info(cl_device_id device, cl_context context,
     if (error != CL_SUCCESS)
     {
         log_error("ERROR: %s function error "
-                  "for CL_KERNEL_SUB_GROUP_COUNT_FOR_NDRANGE",
+                  "for CL_KERNEL_SUB_GROUP_COUNT_FOR_NDRANGE\n",
                   subgroupsApiSet.clGetKernelSubGroupInfo_name);
         return TEST_FAIL;
     }
@@ -190,14 +189,12 @@ int test_sub_group_info(cl_device_id device, cl_context context,
     return 0;
 }
 
-int test_sub_group_info_core(cl_device_id device, cl_context context,
-                             cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(sub_group_info_core, Version(2, 1))
 {
     return test_sub_group_info(device, context, queue, num_elements, true);
 }
 
-int test_sub_group_info_ext(cl_device_id device, cl_context context,
-                            cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(sub_group_info_ext, Version(2, 0))
 {
     bool hasExtension = is_extension_available(device, "cl_khr_subgroups");
 

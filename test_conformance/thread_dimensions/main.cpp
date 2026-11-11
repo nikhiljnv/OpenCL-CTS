@@ -1,6 +1,6 @@
 //
 // Copyright (c) 2017 The Khronos Group Inc.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,30 +14,93 @@
 // limitations under the License.
 //
 #include "harness/compat.h"
+#include "harness/testHarness.h"
 
 #include <stdio.h>
 #include <string.h>
-#include "procs.h"
 
-test_definition test_list[] = {
-    ADD_TEST( quick_1d_explicit_local ),
-    ADD_TEST( quick_2d_explicit_local ),
-    ADD_TEST( quick_3d_explicit_local ),
-    ADD_TEST( quick_1d_implicit_local ),
-    ADD_TEST( quick_2d_implicit_local ),
-    ADD_TEST( quick_3d_implicit_local ),
-    ADD_TEST( full_1d_explicit_local ),
-    ADD_TEST( full_2d_explicit_local ),
-    ADD_TEST( full_3d_explicit_local ),
-    ADD_TEST( full_1d_implicit_local ),
-    ADD_TEST( full_2d_implicit_local ),
-    ADD_TEST( full_3d_implicit_local ),
-};
+// Additional parameters to limit test scope (-n,-b,-x)
+cl_uint maxThreadDimension = 0;
+cl_uint bufferSize = 0;
+cl_uint bufferStep = 0;
 
-const int test_num = ARRAY_SIZE( test_list );
+static test_status parseArgs(int &argc, const char *argv[],
+                             std::vector<std::string> &removed_args,
+                             std::string &help)
+{
+    help = R"(        -n    Maximum thread dimension value
+        -b    Specifies a buffer size for calculations
+        -x    Specifies a step for calculations
+)";
+
+    std::vector<const char *> argList;
+    argList.push_back(argv[0]);
+
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "-n") == 0)
+        {
+            if (i + 1 >= argc || argv[i + 1] == NULL)
+            {
+                log_info("ERROR: -n Maximum thread dimension value missing\n");
+                return TEST_FAIL;
+            }
+            if (atoi(argv[i + 1]) < 1)
+            {
+                log_info("ERROR: -n Maximum thread dimension value must be "
+                         "greater than 0\n");
+                return TEST_FAIL;
+            }
+            maxThreadDimension = atoi(argv[i + 1]);
+            removed_args.push_back(std::string(argv[i]) + " " + argv[i + 1]);
+            i++;
+        }
+        else if (strcmp(argv[i], "-b") == 0)
+        {
+            if (i + 1 >= argc || argv[i + 1] == NULL)
+            {
+                log_info("ERROR: -b Buffer size missing\n");
+                return TEST_FAIL;
+            }
+            if (atoi(argv[i + 1]) < 1)
+            {
+                log_info("ERROR: -b Buffer size must be greater than 0\n");
+                return TEST_FAIL;
+            }
+            bufferSize = atoi(argv[i + 1]);
+            removed_args.push_back(std::string(argv[i]) + " " + argv[i + 1]);
+            i++;
+        }
+        else if (strcmp(argv[i], "-x") == 0)
+        {
+            if (i + 1 >= argc || argv[i + 1] == NULL)
+            {
+                log_info("ERROR: -x Buffer step missing\n");
+                return TEST_FAIL;
+            }
+            if (atoi(argv[i + 1]) < 1)
+            {
+                log_info("ERROR: -x Buffer step must be greater than 0\n");
+                return TEST_FAIL;
+            }
+            bufferStep = atoi(argv[i + 1]);
+            removed_args.push_back(std::string(argv[i]) + " " + argv[i + 1]);
+            i++;
+        }
+        else
+        {
+            argList.push_back(argv[i]);
+        }
+    }
+
+    update_argc_argv_from_args_list(argList, argc, argv);
+    return TEST_PASS;
+}
 
 int main(int argc, const char *argv[])
 {
-    return runTestHarness(argc, argv, test_num, test_list, false, 0);
+    return runTestHarnessWithCheckAndParse(
+        argc, argv, test_registry::getInstance().num_tests(),
+        test_registry::getInstance().definitions(), false, 0, nullptr,
+        parseArgs);
 }
-

@@ -16,11 +16,17 @@
 #include "../testBase.h"
 
 // Defined in test_fill_2D_3D.cpp
-extern int test_fill_image_generic( cl_context context, cl_command_queue queue, image_descriptor *imageInfo,
-                                    const size_t origin[], const size_t region[], ExplicitType outputType, MTdata d );
+extern int test_fill_image_generic(cl_context context, cl_command_queue queue,
+                                   image_descriptor *imageInfo,
+                                   const size_t origin[], const size_t region[],
+                                   ExplicitType outputType, MTdata d,
+                                   const image_test_context_t &ctx);
 
 
-int test_fill_image_size_1D_array( cl_context context, cl_command_queue queue, image_descriptor *imageInfo, ExplicitType outputType, MTdata d )
+int test_fill_image_size_1D_array(cl_context context, cl_command_queue queue,
+                                  image_descriptor *imageInfo,
+                                  ExplicitType outputType, MTdata d,
+                                  const image_test_context_t &ctx)
 {
     size_t origin[ 3 ], region[ 3 ];
     int ret = 0, retCode;
@@ -31,7 +37,8 @@ int test_fill_image_size_1D_array( cl_context context, cl_command_queue queue, i
     region[ 1 ] = imageInfo->arraySize;
     region[ 2 ] = 1;
 
-    retCode = test_fill_image_generic( context, queue, imageInfo, origin, region, outputType, d );
+    retCode = test_fill_image_generic(context, queue, imageInfo, origin, region,
+                                      outputType, d, ctx);
     if ( retCode < 0 )
         return retCode;
     else
@@ -49,7 +56,8 @@ int test_fill_image_size_1D_array( cl_context context, cl_command_queue queue, i
         origin[ 1 ] = ( imageInfo->arraySize > region[ 1 ] ) ? (size_t)random_in_range( 0, (int)( imageInfo->arraySize - region[ 1 ] - 1 ), d ) : 0;
 
         // Go for it!
-        retCode = test_fill_image_generic( context, queue, imageInfo, origin, region, outputType, d );
+        retCode = test_fill_image_generic(context, queue, imageInfo, origin,
+                                          region, outputType, d, ctx);
         if ( retCode < 0 )
             return retCode;
         else
@@ -60,19 +68,25 @@ int test_fill_image_size_1D_array( cl_context context, cl_command_queue queue, i
 }
 
 
-int test_fill_image_set_1D_array( cl_device_id device, cl_context context, cl_command_queue queue, cl_image_format *format, ExplicitType outputType )
+int test_fill_image_set_1D_array(cl_device_id device, cl_context context,
+                                 cl_command_queue queue,
+                                 cl_image_format *format,
+                                 cl_mem_flags mem_flags,
+                                 ExplicitType outputType,
+                                 const image_test_context_t &ctx)
 {
     size_t maxWidth, maxArraySize;
     cl_ulong maxAllocSize, memSize;
     image_descriptor imageInfo = { 0 };
     RandomSeed seed(gRandomSeed);
     const size_t rowPadding_default = 48;
-    size_t rowPadding = gEnablePitch ? rowPadding_default : 0;
+    size_t rowPadding = ctx.enablePitch ? rowPadding_default : 0;
     size_t pixelSize;
 
     memset(&imageInfo, 0x0, sizeof(image_descriptor));
     imageInfo.type = CL_MEM_OBJECT_IMAGE1D_ARRAY;
     imageInfo.format = format;
+    imageInfo.mem_flags = mem_flags;
     pixelSize = get_pixel_size( imageInfo.format );
 
     int error = clGetDeviceInfo( device, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof( maxWidth ), &maxWidth, NULL );
@@ -83,15 +97,16 @@ int test_fill_image_set_1D_array( cl_device_id device, cl_context context, cl_co
 
     if (memSize > (cl_ulong)SIZE_MAX) {
       memSize = (cl_ulong)SIZE_MAX;
+      maxAllocSize = (cl_ulong)SIZE_MAX;
     }
 
-    if ( gTestSmallImages )
+    if (ctx.testSmallImages)
     {
         for ( imageInfo.width = 1; imageInfo.width < 13; imageInfo.width++ )
         {
             imageInfo.rowPitch = imageInfo.width * pixelSize + rowPadding;
 
-            if (gEnablePitch)
+            if (ctx.enablePitch)
             {
               rowPadding = rowPadding_default;
               do {
@@ -103,16 +118,17 @@ int test_fill_image_set_1D_array( cl_device_id device, cl_context context, cl_co
             imageInfo.slicePitch = imageInfo.rowPitch;
             for ( imageInfo.arraySize = 2; imageInfo.arraySize < 9; imageInfo.arraySize++ )
             {
-                if ( gDebugTrace )
+                if (ctx.debugTrace)
                     log_info( "   at size %d,%d\n", (int)imageInfo.width, (int)imageInfo.arraySize );
 
-                int ret = test_fill_image_size_1D_array( context, queue, &imageInfo, outputType, seed );
+                int ret = test_fill_image_size_1D_array(
+                    context, queue, &imageInfo, outputType, seed, ctx);
                 if ( ret )
                     return -1;
             }
         }
     }
-    else if ( gTestMaxImages )
+    else if (ctx.testMaxImages)
     {
         // Try a specific set of maximum sizes
         size_t numbeOfSizes;
@@ -126,7 +142,7 @@ int test_fill_image_set_1D_array( cl_device_id device, cl_context context, cl_co
             imageInfo.arraySize = sizes[ idx ][ 2 ];
             imageInfo.rowPitch = imageInfo.width * pixelSize + rowPadding;
 
-            if (gEnablePitch)
+            if (ctx.enablePitch)
             {
               rowPadding = rowPadding_default;
               do {
@@ -137,9 +153,10 @@ int test_fill_image_set_1D_array( cl_device_id device, cl_context context, cl_co
 
             imageInfo.slicePitch = imageInfo.rowPitch;
             log_info( "Testing %d x %d\n", (int)sizes[ idx ][ 0 ], (int)sizes[ idx ][ 2 ] );
-            if ( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( "   at max size %d,%d\n", (int)sizes[ idx ][ 0 ], (int)sizes[ idx ][ 2 ] );
-            if ( test_fill_image_size_1D_array( context, queue, &imageInfo, outputType, seed ) )
+            if (test_fill_image_size_1D_array(context, queue, &imageInfo,
+                                              outputType, seed, ctx))
                 return -1;
         }
     }
@@ -157,7 +174,7 @@ int test_fill_image_set_1D_array( cl_device_id device, cl_context context, cl_co
 
                 imageInfo.rowPitch = imageInfo.width * pixelSize + rowPadding;
 
-                if (gEnablePitch)
+                if (ctx.enablePitch)
                 {
                   rowPadding = rowPadding_default;
                   do {
@@ -171,9 +188,10 @@ int test_fill_image_set_1D_array( cl_device_id device, cl_context context, cl_co
                 size = (size_t)imageInfo.rowPitch * (size_t)imageInfo.arraySize * 4;
             } while (  size > maxAllocSize || ( size * 3 ) > memSize );
 
-            if ( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( "   at size %d,%d (row pitch %d) out of %d,%d\n", (int)imageInfo.width, (int)imageInfo.arraySize, (int)imageInfo.rowPitch, (int)maxWidth, (int)maxArraySize );
-            int ret = test_fill_image_size_1D_array( context, queue, &imageInfo, outputType, seed );
+            int ret = test_fill_image_size_1D_array(context, queue, &imageInfo,
+                                                    outputType, seed, ctx);
             if ( ret )
                 return -1;
         }

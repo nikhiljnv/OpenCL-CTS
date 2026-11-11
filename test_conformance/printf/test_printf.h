@@ -32,6 +32,8 @@
 #include <CL/cl_platform.h>
 #endif
 
+#include <CL/cl_half.h>
+
 #define ANALYSIS_BUFFER_SIZE 256
 
 //-----------------------------------------
@@ -42,37 +44,52 @@
 // Types
 //-----------------------------------------
 enum PrintfTestType
- {
-     TYPE_INT,
-     TYPE_FLOAT,
-     TYPE_FLOAT_LIMITS,
-     TYPE_OCTAL,
-     TYPE_UNSIGNED,
-     TYPE_HEXADEC,
-     TYPE_CHAR,
-     TYPE_STRING,
-     TYPE_VECTOR,
-     TYPE_ADDRESS_SPACE,
-     TYPE_COUNT
+{
+    TYPE_INT,
+    TYPE_LONG,
+    TYPE_HALF,
+    TYPE_HALF_LIMITS,
+    TYPE_FLOAT,
+    TYPE_FLOAT_LIMITS,
+    TYPE_DOUBLE,
+    TYPE_DOUBLE_LIMITS,
+    TYPE_OCTAL,
+    TYPE_UNSIGNED,
+    TYPE_HEXADEC,
+    TYPE_CHAR,
+    TYPE_STRING,
+    TYPE_FORMAT_STRING,
+    TYPE_VECTOR,
+    TYPE_ADDRESS_SPACE,
+    TYPE_MIXED_FORMAT_RANDOM,
+    TYPE_LENGTH_SPECIFIER,
+    TYPE_SIZET,
+    TYPE_SIZET_64,
+    TYPE_PTRDIFFT,
+    TYPE_PTRDIFFT_64,
+    TYPE_COUNT
 };
 
 struct printDataGenParameters
 {
-    const char* genericFormat;
+    std::vector<std::string> genericFormats;
     const char* dataRepresentation;
-    const char* vectorFormatFlag;
-    const char* vectorFormatSpecifier;
-    const char* dataType;
-    const char* vectorSize;
-    const char* addrSpaceArgumentTypeQualifier;
-    const char* addrSpaceVariableTypeQualifier;
-    const char* addrSpaceParameter;
-    const char* addrSpacePAdd;
+    const char* vectorFormatFlag = nullptr;
+    const char* vectorFormatSpecifier = nullptr;
+    const char* dataType = nullptr;
+    const char* vectorSize = nullptr;
+    const char* addrSpaceArgumentTypeQualifier = nullptr;
+    const char* addrSpaceVariableTypeQualifier = nullptr;
+    const char* addrSpaceParameter = nullptr;
+    const char* addrSpacePAdd = nullptr;
+    bool allowFallbackTest = false;
 };
 
 // Reference results - filled out at run-time
 static std::vector<std::string> correctBufferInt;
+static std::vector<std::string> correctBufferHalf;
 static std::vector<std::string> correctBufferFloat;
+static std::vector<std::string> correctBufferDouble;
 static std::vector<std::string> correctBufferOctal;
 static std::vector<std::string> correctBufferUnsigned;
 static std::vector<std::string> correctBufferHexadecimal;
@@ -99,10 +116,16 @@ struct testCase
                     char*,
                     const size_t);                       //function pointer for generating reference results
     Type dataType;                                       //the data type that will be printed during reference result generation (used for setting rounding mode)
+    bool (*fallbackTestFN)(const char*,
+                           const char*) =
+        nullptr; // function pointer to perform fallback test if required
 };
 
 extern const char* strType[];
 extern std::vector<testCase*> allTestCase;
+extern cl_half_rounding_mode half_rounding_mode;
+
+//-----------------------------------------
 
 size_t verifyOutputBuffer(char *analysisBuffer,testCase* pTestCase,size_t testId,cl_ulong pAddr = 0);
 

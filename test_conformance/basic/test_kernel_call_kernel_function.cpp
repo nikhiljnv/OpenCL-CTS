@@ -1,6 +1,6 @@
 //
 // Copyright (c) 2017 The Khronos Group Inc.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "procs.h"
+#include "testBase.h"
 
 const char *kernel_call_kernel_code[] = {
     "void test_function_to_call(__global int *output, __global int *input, int where);\n"
@@ -57,8 +57,7 @@ const char *kernel_call_kernel_code[] = {
 };
 
 
-
-int test_kernel_call_kernel_function(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(kernel_call_kernel_function)
 {
     num_elements = 256;
 
@@ -67,7 +66,7 @@ int test_kernel_call_kernel_function(cl_device_id deviceID, cl_context context, 
     clKernelWrapper kernel1, kernel2, kernel_to_call;
     clMemWrapper    streams[2];
 
-    size_t    threads[] = {num_elements,1,1};
+    size_t threads[] = { static_cast<size_t>(num_elements), 1, 1 };
     cl_int *input, *output, *expected;
     cl_int times = 4;
     int pass = 0;
@@ -126,19 +125,23 @@ int test_kernel_call_kernel_function(cl_device_id deviceID, cl_context context, 
 
     // Compare the results
     pass = 1;
+    int subtest_errors = 0;
     for (int i=0; i<num_elements; i++) {
-        if (output[i] != expected[i]) {
-            if (errors > 10)
-                continue;
-            if (errors == 10) {
-                log_error("Suppressing further results...\n");
-                continue;
-            }
-            log_error("Results do not match: output[%d]=%d != expected[%d]=%d\n", i, output[i], i, expected[i]);
-            errors++;
+        if (output[i] != expected[i])
+        {
+            subtest_errors++;
             pass = 0;
+            log_error(
+                "Results do not match: output[%d]=%d != expected[%d]=%d\n", i,
+                output[i], i, expected[i]);
+            if (subtest_errors == 10)
+            {
+                log_error("Suppressing further results...\n");
+                break;
+            }
         }
     }
+    errors += subtest_errors;
     if (pass) log_info("Passed kernel calling kernel...\n");
 
 
@@ -173,19 +176,23 @@ int test_kernel_call_kernel_function(cl_device_id deviceID, cl_context context, 
 
     // Compare the results
     pass = 1;
+    subtest_errors = 0;
     for (int i=0; i<num_elements; i++) {
-        if (output[i] != expected[i]) {
-            if (errors > 10)
-                continue;
-            if (errors > 10) {
-                log_error("Suppressing further results...\n");
-                continue;
-            }
-            log_error("Results do not match: output[%d]=%d != expected[%d]=%d\n", i, output[i], i, expected[i]);
-            errors++;
+        if (output[i] != expected[i])
+        {
+            subtest_errors++;
             pass = 0;
+            log_error(
+                "Results do not match: output[%d]=%d != expected[%d]=%d\n", i,
+                output[i], i, expected[i]);
+            if (subtest_errors == 10)
+            {
+                log_error("Suppressing further results...\n");
+                break;
+            }
         }
     }
+    errors += subtest_errors;
     if (pass) log_info("Passed kernel calling function...\n");
 
 
@@ -228,19 +235,23 @@ int test_kernel_call_kernel_function(cl_device_id deviceID, cl_context context, 
 
     // Compare the results
     pass = 1;
+    subtest_errors = 0;
     for (int i=0; i<num_elements; i++) {
-        if (output[i] != expected[i]) {
-            if (errors > 10)
-                continue;
-            if (errors > 10) {
-                log_error("Suppressing further results...\n");
-                continue;
-            }
-            log_error("Results do not match: output[%d]=%d != expected[%d]=%d\n", i, output[i], i, expected[i]);
-            errors++;
+        if (output[i] != expected[i])
+        {
+            subtest_errors++;
             pass = 0;
+            log_error(
+                "Results do not match: output[%d]=%d != expected[%d]=%d\n", i,
+                output[i], i, expected[i]);
+            if (subtest_errors == 10)
+            {
+                log_error("Suppressing further results...\n");
+                break;
+            }
         }
     }
+    errors += subtest_errors;
     if (pass) log_info("Passed calling the kernel we called from another kernel before...\n");
 
     free( input );
@@ -249,5 +260,3 @@ int test_kernel_call_kernel_function(cl_device_id deviceID, cl_context context, 
 
     return errors;
 }
-
-

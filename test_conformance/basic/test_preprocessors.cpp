@@ -1,6 +1,6 @@
 //
 // Copyright (c) 2017 The Khronos Group Inc.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -13,8 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "procs.h"
 #include <ctype.h>
+#include <algorithm>
+
+#include "testBase.h"
 
 // Test __FILE__, __LINE__, __OPENCL_VERSION__, __OPENCL_C_VERSION__, __ENDIAN_LITTLE__, __ROUNDING_MODE__, __IMAGE_SUPPORT__, __FAST_RELAXED_MATH__
 // __kernel_exec
@@ -83,7 +85,7 @@ const char *preprocessor_test = {
     "}\n"
     };
 
-int test_kernel_preprocessor_macros(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(kernel_preprocessor_macros)
 {
     clProgramWrapper program;
     clKernelWrapper kernel;
@@ -95,28 +97,27 @@ int test_kernel_preprocessor_macros(cl_device_id deviceID, cl_context context, c
     cl_int results[ 7 ];
     cl_char fileString[ 512 ] = "", roundingString[ 128 ] = "";
     char programSource[4096];
-    char curFileName[512];
     char *programPtr = programSource;
-    int i = 0;
-    snprintf(curFileName, 512, "%s", __FILE__);
-#ifdef _WIN32
-    // Replace "\" with "\\"
-    while(curFileName[i] != '\0') {
-        if (curFileName[i] == '\\') {
-            int j = i + 1;
-            char prev = '\\';
-            while (curFileName[j - 1] != '\0') {
-                char tmp = curFileName[j];
-                curFileName[j] = prev;
-                prev = tmp;
-                j++;
-            }
-            i++;
-        }
-        i++;
+    std::string testFileName(__FILE__);
+
+    // Shrink the test file name to at most 512 characters, since this will be
+    // the size of the output buffer we read. At some point, this test should be
+    // updated to dynamically handle arbitrarily length file names, but for now,
+    // 512 characters should be sufficient for most file names.
+    if (testFileName.length() > sizeof(fileString) - 1)
+    {
+        testFileName.resize(sizeof(fileString) - 1);
+        log_info(
+            "WARNING: test file name truncated to '%s' for __FILE__ testing.\n",
+            testFileName.c_str());
     }
-#endif
-    sprintf(programSource,preprocessor_test,curFileName);
+
+    // Replace all backslash characters with forward slashes.
+    // This avoid possible issues where some compilers process file names with
+    // escape handling and some compilers do not.
+    std::replace(testFileName.begin(), testFileName.end(), '\\', '/');
+
+    sprintf(programSource, preprocessor_test, testFileName.c_str());
 
     // Create the kernel
     if( create_single_kernel_helper( context, &program, &kernel, 1,  (const char **)&programPtr, "test" ) != 0 )
@@ -156,7 +157,7 @@ int test_kernel_preprocessor_macros(cl_device_id deviceID, cl_context context, c
     /////// Check the integer results
 
     // We need to check these values against what we know is supported on the device
-    if( checkForImageSupport( deviceID ) == 0 )
+    if (checkForImageSupport(device) == 0)
     {
         // If images are supported, the constant should have been defined to the value 1
         if( results[ 0 ] == 0xf00baa )
@@ -182,7 +183,9 @@ int test_kernel_preprocessor_macros(cl_device_id deviceID, cl_context context, c
 
     // __ENDIAN_LITTLE__ is similar to __IMAGE_SUPPORT__: 1 if it's true, undefined if it isn't
     cl_bool deviceIsLittleEndian;
-    error = clGetDeviceInfo( deviceID, CL_DEVICE_ENDIAN_LITTLE, sizeof( deviceIsLittleEndian ), &deviceIsLittleEndian, NULL );
+    error = clGetDeviceInfo(device, CL_DEVICE_ENDIAN_LITTLE,
+                            sizeof(deviceIsLittleEndian), &deviceIsLittleEndian,
+                            NULL);
     test_error( error, "Unable to get endian property of device to validate against" );
 
     if( deviceIsLittleEndian )
@@ -216,8 +219,8 @@ int test_kernel_preprocessor_macros(cl_device_id deviceID, cl_context context, c
 
     // The OpenCL version reported by the macro reports the feature level supported by the compiler. Since
     // this doesn't directly match any property we can query, we just check to see if it's a sane value
-    auto device_cl_version = get_device_cl_version(deviceID);
-    int device_cl_version_int = device_cl_version.to_int() * 10;
+    auto device_cl_version = get_device_cl_version(device);
+    int device_cl_version_int = device_cl_version.to_uint() * 10;
     if ((results[2] < 100) || (results[2] > device_cl_version_int))
     {
         log_error("ERROR: Kernel preprocessor __OPENCL_VERSION__ does not make "
@@ -241,14 +244,16 @@ int test_kernel_preprocessor_macros(cl_device_id deviceID, cl_context context, c
     int cl_c_minor_version = (results[3] / 10) % 10;
     if ((results[3] < 100)
         || (!device_supports_cl_c_version(
-            deviceID, Version{ cl_c_major_version, cl_c_minor_version })))
+            device,
+            Version{ (cl_uint)cl_c_major_version,
+                     (cl_uint)cl_c_minor_version })))
     {
-        auto device_version = get_device_cl_c_version(deviceID);
+        auto device_version = get_device_cl_c_version(device);
         log_error(
             "ERROR: Kernel preprocessor __OPENCL_C_VERSION__ does not make "
             "sense w.r.t. device's version string! "
             "(preprocessor states %d, CL_DEVICE_OPENCL_C_VERSION is %d (%s))\n",
-            results[3], device_version.to_int() * 10,
+            results[3], device_version.to_uint() * 10,
             device_version.to_string().c_str());
         log_error("This means that CL_DEVICE_OPENCL_C_VERSION < "
                   "__OPENCL_C_VERSION__");
@@ -322,12 +327,13 @@ int test_kernel_preprocessor_macros(cl_device_id deviceID, cl_context context, c
         log_error( "ERROR: Kernel preprocessor __FILE__ undefined!\n" );
         return -1;
     }
-    else if( strncmp( (char *)fileString, __FILE__, 512 ) != 0 )
+    else if (strncmp((const char *)fileString, testFileName.c_str(), 512) != 0)
     {
-        log_info( "WARNING: __FILE__ defined, but to an unexpected value (%s)\n\tShould be: \"%s\"", fileString, __FILE__ );
+        log_info("WARNING: __FILE__ defined, but to an unexpected value "
+                 "(%s)\n\tShould be: \"%s\"",
+                 fileString, testFileName.c_str());
         return -1;
     }
-
 
 #if 0 // Removed by Affie's request 2/24
     // One more try through: try with -cl-fast-relaxed-math to make sure the appropriate preprocessor gets defined
@@ -335,7 +341,7 @@ int test_kernel_preprocessor_macros(cl_device_id deviceID, cl_context context, c
     test_error( error, "Unable to create test program" );
 
     // Try compiling
-    error = clBuildProgram( programB, 1, &deviceID, "-cl-fast-relaxed-math", NULL, NULL );
+    error = clBuildProgram( programB, 1, &device, "-cl-fast-relaxed-math", NULL, NULL );
     test_error( error, "Unable to build program" );
 
     // Create a kernel again to run against
@@ -371,4 +377,3 @@ int test_kernel_preprocessor_macros(cl_device_id deviceID, cl_context context, c
 
     return 0;
 }
-

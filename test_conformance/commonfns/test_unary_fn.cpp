@@ -1,0 +1,497 @@
+//
+// Copyright (c) 2023 The Khronos Group Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+
+#include <vector>
+
+#include "harness/deviceInfo.h"
+#include "harness/mathHelpers.h"
+#include "harness/stringHelpers.h"
+#include "harness/typeWrappers.h"
+
+#include "test_base.h"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846264338327950288
+#endif
+
+// clang-format off
+const char *unary_fn_code_pattern =
+"%s\n" /* optional pragma */
+"__kernel void test_fn(__global %s%s *src, __global %s%s *dst)\n"
+"{\n"
+"    int  tid = get_global_id(0);\n"
+"\n"
+"    dst[tid] = %s(src[tid]);\n"
+"}\n";
+
+const char *unary_fn_code_pattern_v3 =
+"%s\n" /* optional pragma */
+"__kernel void test_fn(__global %s *src, __global %s *dst)\n"
+"{\n"
+"    int  tid = get_global_id(0);\n"
+"\n"
+"    vstore3(%s(vload3(tid,src)), tid, dst);\n"
+"}\n";
+// clang-format on
+
+#define MAX_ERR 2.0f
+
+namespace {
+
+template <typename T>
+bool is_half_ftz_zero_allowed(const T input, const T output,
+                              const double reference)
+{
+    if constexpr (!std::is_same<T, half>::value)
+        return false;
+    else
+    {
+        if (BaseFunctionTest::halfDenormsSupported
+            || conv_to_flt(output) != 0.0f)
+            return false;
+
+        return IsHalfSubnormal(static_cast<half>(input))
+            || IsHalfSubnormal(conv_to_half(reference));
+    }
+}
+
+template <typename T> bool is_special_input(const T input)
+{
+    const double value = conv_to_dbl(input);
+    return isnan_fp(input) || std::isinf(value) || value == 0.0;
+}
+
+// Expects a NaN, infinity, or signed-zero input.
+template <typename T>
+bool is_special_value_preserved(const T input, const T output)
+{
+    return isnan_fp(input) ? isnan_fp(output) : fp_value_equals(input, output);
+}
+
+template <typename T>
+int verify_degrees(const T *const inptr, const T *const outptr, int n)
+{
+    float error, max_error = -INFINITY;
+    double r, max_val = NAN;
+    int max_index = 0;
+
+    for (int i = 0; i < n; i++)
+    {
+        if (is_special_input(inptr[i]))
+        {
+            if (!is_special_value_preserved(inptr[i], outptr[i]))
+            {
+                log_error("%d) verification error: degrees(%a): expected %a, "
+                          "got %a\n",
+                          i, conv_to_dbl(inptr[i]), conv_to_dbl(inptr[i]),
+                          conv_to_dbl(outptr[i]));
+                return 1;
+            }
+            continue;
+        }
+
+        r = (180.0 / M_PI) * conv_to_dbl(inptr[i]);
+        if (is_half_ftz_zero_allowed(inptr[i], outptr[i], r)) continue;
+
+        error = UlpFn(outptr[i], r);
+
+        if (fabsf(error) > max_error)
+        {
+            max_error = error;
+            max_index = i;
+            max_val = r;
+            if (fabsf(error) > MAX_ERR)
+            {
+                if (std::is_same<T, half>::value)
+                    log_error(
+                        "%d) Error @ %a: *%a vs %a  (*%g vs %g) ulps: %f\n", i,
+                        conv_to_flt(inptr[i]), r, conv_to_flt(outptr[i]), r,
+                        conv_to_flt(outptr[i]), error);
+                else
+                    log_error(
+                        "%d) Error @ %a: *%a vs %a  (*%g vs %g) ulps: %f\n", i,
+                        conv_to_flt(inptr[i]), r, conv_to_flt(outptr[i]), r,
+                        conv_to_flt(outptr[i]), error);
+                return 1;
+            }
+        }
+    }
+
+    if (std::is_same<T, half>::value)
+        log_info("degrees: Max error %f ulps at %d, input %a: *%a vs %a  (*%g "
+                 "vs %g)\n",
+                 max_error, max_index, conv_to_flt(inptr[max_index]), max_val,
+                 conv_to_flt(outptr[max_index]), max_val,
+                 conv_to_flt(outptr[max_index]));
+    else
+        log_info("degrees: Max error %f ulps at %d, input %a: *%a vs %a  (*%g "
+                 "vs %g)\n",
+                 max_error, max_index, conv_to_flt(inptr[max_index]), max_val,
+                 conv_to_flt(outptr[max_index]), max_val,
+                 conv_to_flt(outptr[max_index]));
+
+    return 0;
+}
+
+template <typename T>
+int verify_radians(const T *const inptr, const T *const outptr, int n)
+{
+    float error, max_error = -INFINITY;
+    double r, max_val = NAN;
+    int max_index = 0;
+
+    for (int i = 0; i < n; i++)
+    {
+        if (is_special_input(inptr[i]))
+        {
+            if (!is_special_value_preserved(inptr[i], outptr[i]))
+            {
+                log_error("%d) verification error: radians(%a): expected %a, "
+                          "got %a\n",
+                          i, conv_to_dbl(inptr[i]), conv_to_dbl(inptr[i]),
+                          conv_to_dbl(outptr[i]));
+                return 1;
+            }
+            continue;
+        }
+
+        r = (M_PI / 180.0) * conv_to_dbl(inptr[i]);
+        if (is_half_ftz_zero_allowed(inptr[i], outptr[i], r)) continue;
+
+        error = UlpFn(outptr[i], r);
+
+        if (fabsf(error) > max_error)
+        {
+            max_error = error;
+            max_index = i;
+            max_val = r;
+            if (fabsf(error) > MAX_ERR)
+            {
+                if (std::is_same<T, half>::value)
+                    log_error(
+                        "%d) Error @ %a: *%a vs %a  (*%g vs %g) ulps: %f\n", i,
+                        conv_to_flt(inptr[i]), r, conv_to_flt(outptr[i]), r,
+                        conv_to_flt(outptr[i]), error);
+                else
+                    log_error(
+                        "%d) Error @ %a: *%a vs %a  (*%g vs %g) ulps: %f\n", i,
+                        conv_to_flt(inptr[i]), r, conv_to_flt(outptr[i]), r,
+                        conv_to_flt(outptr[i]), error);
+                return 1;
+            }
+        }
+    }
+
+    if (std::is_same<T, half>::value)
+        log_info("radians: Max error %f ulps at %d, input %a: *%a vs %a  (*%g "
+                 "vs %g)\n",
+                 max_error, max_index, conv_to_flt(inptr[max_index]), max_val,
+                 conv_to_flt(outptr[max_index]), max_val,
+                 conv_to_flt(outptr[max_index]));
+    else
+        log_info("radians: Max error %f ulps at %d, input %a: *%a vs %a  (*%g "
+                 "vs %g)\n",
+                 max_error, max_index, conv_to_flt(inptr[max_index]), max_val,
+                 conv_to_flt(outptr[max_index]), max_val,
+                 conv_to_flt(outptr[max_index]));
+
+    return 0;
+}
+
+template <typename T>
+int verify_sign(const T *const inptr, const T *const outptr, int n)
+{
+    double r = 0;
+    for (int i = 0; i < n; i++)
+    {
+        // sign preserves the sign of zero.
+        if (conv_to_dbl(inptr[i]) == 0.0)
+        {
+            if (!fp_value_equals(inptr[i], outptr[i]))
+            {
+                log_error("%d) Error: sign(%a) returned %a\n", i,
+                          conv_to_flt(inptr[i]), conv_to_flt(outptr[i]));
+                return -1;
+            }
+            continue;
+        }
+
+        if (conv_to_dbl(inptr[i]) > 0.0f)
+            r = 1.0;
+        else if (conv_to_dbl(inptr[i]) < 0.0f)
+            r = -1.0;
+        else // NaN
+            r = 0.0;
+        if (!fp_value_equals(r, outptr[i]))
+        {
+            if (!is_half_ftz_zero_allowed(inptr[i], outptr[i], r))
+            {
+                log_error("%d) Error: sign(%a) returned %a\n", i,
+                          conv_to_flt(inptr[i]), conv_to_flt(outptr[i]));
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+}
+
+template <typename T>
+int test_unary_fn(cl_device_id device, cl_context context,
+                  cl_command_queue queue, int n_elems,
+                  const std::string &fnName, VerifyFuncUnary<T> verifyFn)
+{
+    clMemWrapper streams[2];
+    std::vector<T> input_ptr, output_ptr;
+
+    std::vector<clProgramWrapper> programs;
+    std::vector<clKernelWrapper> kernels;
+
+    int err, i;
+    MTdataHolder d = MTdataHolder(gRandomSeed);
+
+    assert(BaseFunctionTest::type2name.find(sizeof(T))
+           != BaseFunctionTest::type2name.end());
+    auto tname = BaseFunctionTest::type2name[sizeof(T)];
+
+    programs.resize(kTotalVecCount);
+    kernels.resize(kTotalVecCount);
+
+    const bool test_all_half_inputs = std::is_same<T, half>::value;
+    constexpr int all_half_input_count = 1 << 16;
+    int num_elements = n_elems * (1 << (kTotalVecCount - 1));
+    if (test_all_half_inputs)
+    {
+        // Pad the 65536 inputs so each vector variant can process whole
+        // vectors. 48 is the LCM of all vector widths (1, 2, 3, 4, 8, 16).
+        constexpr int allocation_multiple = 48;
+        num_elements = ((all_half_input_count + allocation_multiple - 1)
+                        / allocation_multiple)
+            * allocation_multiple;
+    }
+
+    input_ptr.resize(num_elements);
+    output_ptr.resize(num_elements);
+
+    for (i = 0; i < 2; i++)
+    {
+        streams[i] = clCreateBuffer(context, CL_MEM_READ_WRITE,
+                                    sizeof(T) * num_elements, NULL, &err);
+        test_error(err, "clCreateBuffer failed");
+    }
+
+    std::string pragma_str;
+    if (std::is_same<T, float>::value)
+    {
+        for (int j = 0; j < num_elements; j++)
+        {
+            input_ptr[j] = get_random_float((float)(-100000.f * M_PI),
+                                            (float)(100000.f * M_PI), d);
+        }
+    }
+    else if (std::is_same<T, double>::value)
+    {
+        pragma_str = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n";
+        for (int j = 0; j < num_elements; j++)
+        {
+            input_ptr[j] =
+                get_random_double(-100000.0 * M_PI, 100000.0 * M_PI, d);
+        }
+    }
+    else if (std::is_same<T, half>::value)
+    {
+        pragma_str = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n";
+        for (int j = 0; j < num_elements; j++)
+        {
+            input_ptr[j] = static_cast<half>(j % all_half_input_count);
+        }
+    }
+
+    err = clEnqueueWriteBuffer(queue, streams[0], true, 0,
+                               sizeof(T) * num_elements, &input_ptr.front(), 0,
+                               NULL, NULL);
+    test_error(err, "clEnqueueWriteBuffer failed\n");
+
+    for (i = 0; i < kTotalVecCount; i++)
+    {
+        std::string kernelSource;
+        const char vecSizeNames[][3] = { "", "2", "4", "8", "16", "3" };
+
+        if (i >= kVectorSizeCount)
+        {
+            std::string str = unary_fn_code_pattern_v3;
+            kernelSource = str_sprintf(str, pragma_str.c_str(), tname.c_str(),
+                                       tname.c_str(), fnName.c_str());
+        }
+        else
+        {
+            std::string str = unary_fn_code_pattern;
+            kernelSource = str_sprintf(str, pragma_str.c_str(), tname.c_str(),
+                                       vecSizeNames[i], tname.c_str(),
+                                       vecSizeNames[i], fnName.c_str());
+        }
+
+        /* Create kernels */
+        const char *programPtr = kernelSource.c_str();
+        err =
+            create_single_kernel_helper(context, &programs[i], &kernels[i], 1,
+                                        (const char **)&programPtr, "test_fn");
+
+        err = clSetKernelArg(kernels[i], 0, sizeof streams[0], &streams[0]);
+        err |= clSetKernelArg(kernels[i], 1, sizeof streams[1], &streams[1]);
+        if (err != CL_SUCCESS)
+        {
+            log_error("clSetKernelArgs failed\n");
+            return -1;
+        }
+
+        // Line below is troublesome...
+        size_t threads = (size_t)num_elements / ((g_arrVecSizes[i]));
+        err = clEnqueueNDRangeKernel(queue, kernels[i], 1, NULL, &threads, NULL,
+                                     0, NULL, NULL);
+        if (err != CL_SUCCESS)
+        {
+            log_error("clEnqueueNDRangeKernel failed\n");
+            return -1;
+        }
+
+        cl_uint dead = 42;
+        memset_pattern4(&output_ptr[0], &dead, sizeof(T) * num_elements);
+        err = clEnqueueReadBuffer(queue, streams[1], true, 0,
+                                  sizeof(T) * num_elements, &output_ptr[0], 0,
+                                  NULL, NULL);
+        if (err != CL_SUCCESS)
+        {
+            log_error("clEnqueueReadBuffer failed\n");
+            return -1;
+        }
+
+        const int elements_to_verify = test_all_half_inputs
+            ? all_half_input_count
+            : n_elems * g_arrVecSizes[i];
+        if (verifyFn((T *)&input_ptr.front(), (T *)&output_ptr.front(),
+                     elements_to_verify))
+        {
+            log_error("%s %s%d test failed\n", fnName.c_str(), tname.c_str(),
+                      ((g_arrVecSizes[i])));
+            err = -1;
+        }
+        else
+        {
+            log_info("%s %s%d test passed\n", fnName.c_str(), tname.c_str(),
+                     ((g_arrVecSizes[i])));
+        }
+
+        if (err) break;
+    }
+
+    return err;
+}
+
+cl_int DegreesTest::Run()
+{
+    cl_int error = CL_SUCCESS;
+    if (is_extension_available(device, "cl_khr_fp16"))
+    {
+        error = test_unary_fn<half>(device, context, queue, num_elems,
+                                    fnName.c_str(), verify_degrees<half>);
+        test_error(error, "DegreesTest::Run<cl_half> failed");
+    }
+
+    error = test_unary_fn<float>(device, context, queue, num_elems,
+                                 fnName.c_str(), verify_degrees<float>);
+    test_error(error, "DegreesTest::Run<float> failed");
+
+    if (is_extension_available(device, "cl_khr_fp64"))
+    {
+        error = test_unary_fn<double>(device, context, queue, num_elems,
+                                      fnName.c_str(), verify_degrees<double>);
+        test_error(error, "DegreesTest::Run<double> failed");
+    }
+
+    return error;
+}
+
+cl_int RadiansTest::Run()
+{
+    cl_int error = CL_SUCCESS;
+    if (is_extension_available(device, "cl_khr_fp16"))
+    {
+        error = test_unary_fn<half>(device, context, queue, num_elems,
+                                    fnName.c_str(), verify_radians<half>);
+        test_error(error, "RadiansTest::Run<cl_half> failed");
+    }
+
+    error = test_unary_fn<float>(device, context, queue, num_elems,
+                                 fnName.c_str(), verify_radians<float>);
+    test_error(error, "RadiansTest::Run<float> failed");
+
+    if (is_extension_available(device, "cl_khr_fp64"))
+    {
+        error = test_unary_fn<double>(device, context, queue, num_elems,
+                                      fnName.c_str(), verify_radians<double>);
+        test_error(error, "RadiansTest::Run<double> failed");
+    }
+
+    return error;
+}
+
+cl_int SignTest::Run()
+{
+    cl_int error = CL_SUCCESS;
+    if (is_extension_available(device, "cl_khr_fp16"))
+    {
+        error = test_unary_fn<half>(device, context, queue, num_elems,
+                                    fnName.c_str(), verify_sign<half>);
+        test_error(error, "SignTest::Run<cl_half> failed");
+    }
+
+    error = test_unary_fn<float>(device, context, queue, num_elems,
+                                 fnName.c_str(), verify_sign<float>);
+    test_error(error, "SignTest::Run<float> failed");
+
+    if (is_extension_available(device, "cl_khr_fp64"))
+    {
+        error = test_unary_fn<double>(device, context, queue, num_elems,
+                                      fnName.c_str(), verify_sign<double>);
+        test_error(error, "SignTest::Run<double> failed");
+    }
+
+    return error;
+}
+
+REGISTER_TEST(degrees)
+{
+    return MakeAndRunTest<DegreesTest>(device, context, queue, num_elements,
+                                       "degrees");
+}
+
+REGISTER_TEST(radians)
+{
+    return MakeAndRunTest<RadiansTest>(device, context, queue, num_elements,
+                                       "radians");
+}
+
+REGISTER_TEST(sign)
+{
+    return MakeAndRunTest<SignTest>(device, context, queue, num_elements,
+                                    "sign");
+}

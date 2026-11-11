@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#ifndef _COMPAT_H_
-#define _COMPAT_H_
+#ifndef COMPAT_H_
+#define COMPAT_H_
 
 #if defined(_WIN32) && defined(_MSC_VER)
 #include <Windows.h>
@@ -116,6 +116,15 @@ int feclearexcept(int excepts);
 #include <math.h>
 #endif
 
+#ifdef __cplusplus
+#include <cmath>
+extern "C" {
+using std::isfinite;
+using std::isinf;
+using std::isnan;
+}
+#endif
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846264338327950288
 #endif
@@ -136,18 +145,6 @@ extern "C" {
 
 #ifndef INFINITY
 #define INFINITY (FLT_MAX + FLT_MAX)
-#endif
-
-#ifndef isfinite
-#define isfinite(x) _finite(x)
-#endif
-
-#ifndef isnan
-#define isnan(x) ((x) != (x))
-#endif
-
-#ifndef isinf
-#define isinf(_x) ((_x) == INFINITY || (_x) == -INFINITY)
 #endif
 
 #if _MSC_VER < 1900 && !defined(__INTEL_COMPILER)
@@ -398,4 +395,4 @@ EXTERN_C int __builtin_clz(unsigned int pattern);
 #define sleep(sec) Sleep((sec)*1000)
 #endif
 
-#endif // _COMPAT_H_
+#endif // COMPAT_H_

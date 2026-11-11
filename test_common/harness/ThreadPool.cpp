@@ -16,6 +16,7 @@
 #include "ThreadPool.h"
 #include "errorHelpers.h"
 #include "fpcontrol.h"
+#include "parseParameters.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -23,6 +24,7 @@
 // or any other POSIX system
 
 #include <atomic>
+#include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -32,9 +34,9 @@
 #include "mingw_compat.h"
 #include <process.h>
 #else // !_WIN32
+#include <errno.h>
 #include <pthread.h>
 #include <unistd.h>
-#include <sys/errno.h>
 #ifdef __linux__
 #include <sched.h>
 #endif
@@ -56,6 +58,12 @@ CRITICAL_SECTION gAtomicLock;
 #elif defined(__GNUC__) || defined(_MSC_VER)
 #else
 pthread_mutex_t gAtomicLock;
+#endif
+
+#if !defined(_WIN32)
+// Keep track of pthread_t's created in ThreadPool_Init() so they can be joined
+// in ThreadPool_Exit() and avoid thread leaks.
+static std::vector<pthread_t> pthreads;
 #endif
 
 // Atomic add operator with mem barrier.  Mem barrier needed to protect state
@@ -109,8 +117,10 @@ typedef BOOL(CALLBACK *_PINIT_ONCE_FN)(_PINIT_ONCE, PVOID, PVOID *);
 #define _INIT_ONCE_IN_PROGRESS 1
 #define _INIT_ONCE_DONE 2
 
-static BOOL _InitOnceExecuteOnce(_PINIT_ONCE InitOnce, _PINIT_ONCE_FN InitFn,
-                                 PVOID Parameter, LPVOID *Context)
+[[maybe_unused]] static BOOL _InitOnceExecuteOnce(_PINIT_ONCE InitOnce,
+                                                  _PINIT_ONCE_FN InitFn,
+                                                  PVOID Parameter,
+                                                  LPVOID *Context)
 {
     while (*InitOnce != _INIT_ONCE_DONE)
     {
@@ -266,7 +276,7 @@ pthread_cond_t caller_cond_var;
 std::atomic<cl_int> gRunning{ 0 };
 
 // The total number of threads launched.
-std::atomic<cl_int> gThreadCount{ 0 };
+static std::atomic<cl_int> gThreadCount{ 0 };
 
 #ifdef _WIN32
 void ThreadPool_WorkerFunc(void *p)
@@ -429,7 +439,14 @@ void *ThreadPool_WorkerFunc(void *p)
 
                 // drop run count to 0
                 gRunCount = 0;
+#if defined(_M_IX86) || defined(_M_X64)
                 _mm_mfence();
+#elif defined(_M_ARM64)
+                __dmb(_ARM64_BARRIER_ISHST);
+#else
+#error Architecture needs an implementation
+#endif
+
 #else
                 if (pthread_mutex_lock(&gAtomicLock))
                     log_error(
@@ -456,31 +473,6 @@ exit:
 #endif
 }
 
-// SetThreadCount() may be used to artifically set the number of worker threads
-// If the value is 0 (the default) the number of threads will be determined
-// based on the number of CPU cores.  If it is a unicore machine, then 2 will be
-// used, so that we still get some testing for thread safety.
-//
-// If count < 2 or the CL_TEST_SINGLE_THREADED environment variable is set then
-// the code will run single threaded, but will report an error to indicate that
-// the test is invalid.  This option is intended for debugging purposes only. It
-// is suggested as a convention that test apps set the thread count to 1 in
-// response to the -m flag.
-//
-// SetThreadCount() must be called before the first call to GetThreadCount() or
-// ThreadPool_Do(), otherwise the behavior is indefined.
-void SetThreadCount(int count)
-{
-    if (threadPoolInitErr == CL_SUCCESS)
-    {
-        log_error("Error: It is illegal to set the thread count after the "
-                  "first call to ThreadPool_Do or GetThreadCount\n");
-        abort();
-    }
-
-    gThreadCount = count;
-}
-
 void ThreadPool_Init(void)
 {
     cl_int i;
@@ -489,11 +481,15 @@ void ThreadPool_Init(void)
 
     // Check for manual override of multithreading code. We add this for better
     // debuggability.
-    if (getenv("CL_TEST_SINGLE_THREADED"))
+    if (getenv("CL_TEST_SINGLE_THREADED") || (gNumThreadPoolThreads != 0))
     {
-        log_error("ERROR: CL_TEST_SINGLE_THREADED is set in the environment. "
-                  "Running single threaded.\n*** TEST IS INVALID! ***\n");
-        gThreadCount = 1;
+        log_info("\n");
+        log_info("*****************************************\n");
+        log_info("***           !! WARNING !!           ***\n");
+        log_info("*** ThreadPool is disabled or reduced ***\n");
+        log_info("*****************************************\n");
+        log_info("\n");
+        gThreadCount = gNumThreadPoolThreads;
         return;
     }
 
@@ -578,16 +574,6 @@ void ThreadPool_Init(void)
     }
 #endif
 
-    // Allow the app to set thread count to <0 for debugging purposes.
-    // This will cause the test to run single threaded.
-    if (gThreadCount < 2)
-    {
-        log_error("ERROR: Running single threaded because thread count < 2. "
-                  "\n*** TEST IS INVALID! ***\n");
-        gThreadCount = 1;
-        return;
-    }
-
 #if defined(_WIN32)
     InitializeCriticalSection(gThreadPoolLock);
     InitializeCriticalSection(cond_lock);
@@ -642,6 +628,9 @@ void ThreadPool_Init(void)
             gThreadCount = i;
             break;
         }
+#if !defined(_WIN32)
+        pthreads.push_back(tid);
+#endif // !_WIN32
     }
 
     atexit(ThreadPool_Exit);
@@ -693,7 +682,13 @@ void ThreadPool_Exit(void)
     // http://gcc.gnu.org/onlinedocs/gcc/Atomic-Builtins.html#Atomic-Builtins
     __sync_synchronize();
 #elif defined(_MSC_VER)
+#if defined(_M_IX86) || defined(_M_X64)
     _mm_mfence();
+#elif defined(_M_ARM64)
+    __dmb(_ARM64_BARRIER_ISHST);
+#else
+#error Architecture needs an implementation
+#endif
 #else
 #warning If this is a weakly ordered memory system, please add a memory barrier here to force this and everything else to memory before we proceed
 #endif
@@ -721,7 +716,20 @@ void ThreadPool_Exit(void)
                   "still active.\n",
                   gThreadCount.load());
     else
+    {
+#if !defined(_WIN32)
+        for (pthread_t pthread : pthreads)
+        {
+            if (int err = pthread_join(pthread, nullptr))
+            {
+                log_error("Error from %d from pthread_join. Unable to join "
+                          "work threads. ThreadPool_Exit failed.\n",
+                          err);
+            }
+        }
+#endif
         log_info("Thread pool exited in a orderly fashion.\n");
+    }
 }
 
 
@@ -1020,10 +1028,5 @@ cl_int ThreadPool_Do(TPFuncPtr func_ptr, cl_uint count, void *userInfo)
 }
 
 cl_uint GetThreadCount(void) { return 1; }
-
-void SetThreadCount(int count)
-{
-    if (count > 1) log_info("WARNING: SetThreadCount(%d) ignored\n", count);
-}
 
 #endif

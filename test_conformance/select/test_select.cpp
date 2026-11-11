@@ -1,6 +1,6 @@
 //
 // Copyright (c) 2017 The Khronos Group Inc.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -14,11 +14,16 @@
 // limitations under the License.
 //
 #include "harness/compat.h"
+#include "harness/typeWrappers.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <time.h>
 #include <string.h>
+
+#include <cinttypes>
+#include <vector>
+
 #if ! defined( _WIN32)
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
@@ -29,6 +34,7 @@
 
 #include "harness/testHarness.h"
 #include "harness/kernelHelpers.h"
+#include "harness/mathHelpers.h"
 #include "harness/mt19937.h"
 #include "harness/parseParameters.h"
 
@@ -42,11 +48,15 @@ static void initSrcBuffer(void* src1, Type stype, MTdata);
 
 // initialize the valued used to compare with in the select with
 // vlaues [start, count)
-static void initCmpBuffer(void* cmp, Type cmptype, uint64_t start, size_t count);
+static void initCmpBuffer(void *cmp, Type cmptype, uint32_t start,
+                          const size_t count, const uint32_t vecsize,
+                          MTdataHolder &d);
 
 // make a program that uses select for the given stype (src/dest type),
 // ctype (comparison type), veclen (vector length)
-static cl_program makeSelectProgram(cl_kernel *kernel_ptr, const cl_context context, Type stype, Type ctype, size_t veclen );
+static cl_program makeSelectProgram(cl_kernel *kernel_ptr, cl_context context,
+                                    Type stype, Type ctype,
+                                    const size_t veclen);
 
 // Creates and execute the select test for the given device, context,
 // stype (source/dest type), cmptype (comparison type), using max_tg_size
@@ -54,9 +64,6 @@ static cl_program makeSelectProgram(cl_kernel *kernel_ptr, const cl_context cont
 // for the given stype and cmptype.
 static int doTest(cl_command_queue queue, cl_context context,
                   Type stype, Type cmptype, cl_device_id device);
-
-
-static void printUsage( void );
 
 //-----------------------------------------
 // Definitions and initializations
@@ -66,20 +73,16 @@ static void printUsage( void );
 #define BUFFER_SIZE (1024*1024)
 #define KPAGESIZE 4096
 
-
-// When we indicate non wimpy mode, the types that are 32 bits value will
-// test their entire range and 64 bits test will test the 32 bit
-// range.  Otherwise, we test a subset of the range
-// [-min_short, min_short]
-static bool  s_wimpy_mode = false;
-static int s_wimpy_reduction_factor = 256;
-
-// Tests are broken into the major test which is based on the
-// src and cmp type and their corresponding vector types and
-// sub tests which is for each individual test.  The following
-// tracks the subtests
-int s_test_cnt = 0;
-int s_test_fail = 0;
+#define test_error_count(errCode, msg)                                         \
+    {                                                                          \
+        auto errCodeResult = errCode;                                          \
+        if (errCodeResult != CL_SUCCESS)                                       \
+        {                                                                      \
+            gFailCount++;                                                      \
+            print_error(errCodeResult, msg);                                   \
+            return errCode;                                                    \
+        }                                                                      \
+    }
 
 //-----------------------------------------
 // Static helper functions
@@ -113,48 +116,87 @@ static void initSrcBuffer(void* src1, Type stype, MTdata d)
         s1[i]   = genrand_int32(d);
 }
 
-static void initCmpBuffer(void* cmp, Type cmptype, uint64_t start, size_t count) {
-    int i;
+static void initCmpBuffer(void *cmp, Type cmptype, uint32_t start,
+                          const size_t count, const uint32_t vecsize,
+                          MTdataHolder &d)
+
+{
     assert(cmptype != kfloat);
     switch (type_size[cmptype]) {
         case 1: {
-            uint8_t* ub = (uint8_t *)cmp;
-            for (i=0; i < count; ++i)
-                ub[i] = (uint8_t)start++;
+            uint8_t *ub = (uint8_t *)cmp;
+            if (vecsize == 1)
+                for (uint32_t i = 0; i < count; i++)
+                    ub[i] = i % 2 ? 0 : (start + i) / 2;
+            else
+                for (uint32_t i = 0; i < count; i++)
+                {
+                    uint16_t vec_bitmask = (start + i) / vecsize;
+                    uint16_t vec_idx = (start + i) % vecsize;
+                    uint8_t gen = genrand_int32(d) & 0xff;
+                    ub[i] = ((vec_bitmask >> vec_idx) & 0x1) ? gen | 0x80
+                                                             : gen & 0x7f;
+                }
             break;
         }
         case 2: {
             uint16_t* us = (uint16_t *)cmp;
-            for (i=0; i < count; ++i)
-                us[i] = (uint16_t)start++;
+            if (vecsize == 1)
+            {
+                for (uint32_t i = 0; i < count; i++)
+                    us[i] = i % 2 ? 0 : genrand_int32(d) & 0xffff;
+            }
+            else
+            {
+                for (uint32_t i = 0; i < count; i++)
+                {
+                    uint16_t vec_bitmask = (start + i) / vecsize;
+                    uint16_t vec_idx = (start + i) % vecsize;
+                    uint16_t gen = genrand_int32(d) & 0xffff;
+                    us[i] = ((vec_bitmask >> vec_idx) & 0x1) ? gen | 0x8000
+                                                             : gen & 0x7fff;
+                }
+            }
             break;
         }
         case 4: {
-            if (!s_wimpy_mode) {
-                uint32_t* ui = (uint32_t *)cmp;
-                for (i=0; i < count; ++i)
-                    ui[i] = (uint32_t)start++;
+            uint32_t *ui = (uint32_t *)cmp;
+            if (vecsize == 1)
+            {
+                for (uint32_t i = 0; i < count; i++)
+                    ui[i] = i % 2 ? 0 : genrand_int32(d);
             }
-            else {
-                // The short test doesn't iterate over the entire 32 bit space so
-                // we alternate between positive and negative values
-                int32_t* ui = (int32_t *)cmp;
-                int32_t sign = 1;
-                for (i=0; i < count; ++i, ++start) {
-                    ui[i] = (int32_t)start*sign;
-                    sign = sign * -1;
+            else
+            {
+                for (uint32_t i = 0; i < count; i++)
+                {
+                    uint16_t vec_bitmask = (start + i) / vecsize;
+                    uint16_t vec_idx = (start + i) % vecsize;
+                    uint32_t gen = genrand_int32(d);
+                    ui[i] = ((vec_bitmask >> vec_idx) & 0x1) ? gen | 0x80000000
+                                                             : gen & 0x7fffffff;
                 }
             }
             break;
         }
         case 8: {
-            // We don't iterate over the entire space of 64 bit so for the
-            // selects, we want to test positive and negative values
-            int64_t* ll = (int64_t *)cmp;
-            int64_t sign = 1;
-            for (i=0; i < count; ++i, ++start) {
-                ll[i] = start*sign;
-                sign = sign * -1;
+            uint64_t *ul = (uint64_t *)cmp;
+            if (vecsize == 1)
+            {
+                for (uint32_t i = 0; i < count; i++)
+                    ul[i] = i % 2 ? 0 : genrand_int64(d);
+            }
+            else
+            {
+                for (uint32_t i = 0; i < count; i++)
+                {
+                    uint16_t vec_bitmask = (start + i) / vecsize;
+                    uint16_t vec_idx = (start + i) % vecsize;
+                    uint64_t gen = genrand_int64(d);
+                    ul[i] = ((vec_bitmask >> vec_idx) & 0x1)
+                        ? gen | 0x8000000000000000ULL
+                        : gen & 0x7fffffffffffffffULL;
+                }
             }
             break;
         }
@@ -166,15 +208,15 @@ static void initCmpBuffer(void* cmp, Type cmptype, uint64_t start, size_t count)
 // Make the various incarnations of the program we want to run
 //  stype: source and destination type for the select
 //  ctype: compare type
-static cl_program makeSelectProgram(cl_kernel *kernel_ptr, const cl_context context, Type srctype, Type cmptype, size_t vec_len)
+static cl_program makeSelectProgram(cl_kernel *kernel_ptr,
+                                    const cl_context context, Type srctype,
+                                    Type cmptype, const size_t vec_len)
 {
     char testname[256];
     char stypename[32];
     char ctypename[32];
     char extension[128] = "";
     int  err = 0;
-
-    int i; // generic, re-usable loop variable
 
     const char *source[] = {
         extension,
@@ -240,18 +282,25 @@ static cl_program makeSelectProgram(cl_kernel *kernel_ptr, const cl_context cont
     if (srctype == kdouble)
         strcpy( extension, "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n" );
 
+    if (srctype == khalf)
+        strcpy(extension, "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n");
+
     // create type name and testname
     switch( vec_len )
     {
         case 1:
-            strncpy(stypename, type_name[srctype], sizeof(stypename));
-            strncpy(ctypename, type_name[cmptype], sizeof(ctypename));
+            strncpy(stypename, type_name[srctype], sizeof(stypename) - 1);
+            stypename[sizeof(stypename) - 1] = '\0';
+            strncpy(ctypename, type_name[cmptype], sizeof(ctypename) - 1);
+            ctypename[sizeof(ctypename) - 1] = '\0';
             snprintf(testname, sizeof(testname), "select_%s_%s", stypename, ctypename );
             log_info("Building %s(%s, %s, %s)\n", testname, stypename, stypename, ctypename);
             break;
         case 3:
-            strncpy(stypename, type_name[srctype], sizeof(stypename));
-            strncpy(ctypename, type_name[cmptype], sizeof(ctypename));
+            strncpy(stypename, type_name[srctype], sizeof(stypename) - 1);
+            stypename[sizeof(stypename) - 1] = '\0';
+            strncpy(ctypename, type_name[cmptype], sizeof(ctypename) - 1);
+            ctypename[sizeof(ctypename) - 1] = '\0';
             snprintf(testname, sizeof(testname), "select_%s3_%s3", stypename, ctypename );
             log_info("Building %s(%s3, %s3, %s3)\n", testname, stypename, stypename, ctypename);
             break;
@@ -291,35 +340,32 @@ static cl_program makeSelectProgram(cl_kernel *kernel_ptr, const cl_context cont
     return program;
 }
 
-
 #define VECTOR_SIZE_COUNT   6
 
 static int doTest(cl_command_queue queue, cl_context context, Type stype, Type cmptype, cl_device_id device)
 {
     int err = CL_SUCCESS;
-    MTdata    d;
+    MTdataHolder d(gRandomSeed);
     const size_t element_count[VECTOR_SIZE_COUNT] = { 1, 2, 3, 4, 8, 16 };
-    cl_mem src1 = NULL;
-    cl_mem src2 = NULL;
-    cl_mem cmp = NULL;
-    cl_mem dest = NULL;
-    void *ref = NULL;
-    void *sref = NULL;
+    clMemWrapper src1, src2, cmp, dest;
 
-    cl_ulong blocks = type_size[stype] * 0x100000000ULL / BUFFER_SIZE;
-    size_t block_elements = BUFFER_SIZE / type_size[stype];
-    size_t step = s_wimpy_mode ? s_wimpy_reduction_factor : 1;
-    cl_ulong cmp_stride = block_elements * step;
+    const size_t block_elements = BUFFER_SIZE / type_size[stype];
 
     // It is more efficient to create the tests all at once since we
     // use the same test data on each of the vector sizes
-    int vecsize;
-    cl_program programs[VECTOR_SIZE_COUNT];
-    cl_kernel  kernels[VECTOR_SIZE_COUNT];
+    clProgramWrapper programs[VECTOR_SIZE_COUNT];
+    clKernelWrapper kernels[VECTOR_SIZE_COUNT];
 
-    if(stype == kdouble && ! is_extension_available( device, "cl_khr_fp64" ))
+    if (stype == kdouble && !is_extension_available(device, "cl_khr_fp64"))
     {
         log_info("Skipping double because cl_khr_fp64 extension is not supported.\n");
+        return 0;
+    }
+
+    if (stype == khalf && !is_extension_available(device, "cl_khr_fp16"))
+    {
+        log_info(
+            "Skipping half because cl_khr_fp16 extension is not supported.\n");
         return 0;
     }
 
@@ -338,331 +384,207 @@ static int doTest(cl_command_queue queue, cl_context context, Type stype, Type c
        }
     }
 
-    for (vecsize = 0; vecsize < VECTOR_SIZE_COUNT; ++vecsize)
+    src1 = clCreateBuffer( context, CL_MEM_READ_ONLY, BUFFER_SIZE, NULL, &err );
+    test_error_count(err, "Error: could not allocate src1 buffer\n");
+    src2 = clCreateBuffer( context, CL_MEM_READ_ONLY, BUFFER_SIZE, NULL, &err );
+    test_error_count(err, "Error: could not allocate src2 buffer\n");
+    cmp = clCreateBuffer( context, CL_MEM_READ_ONLY, BUFFER_SIZE, NULL, &err );
+    test_error_count(err, "Error: could not allocate cmp buffer\n");
+    dest = clCreateBuffer( context, CL_MEM_WRITE_ONLY, BUFFER_SIZE, NULL, &err );
+    test_error_count(err, "Error: could not allocate dest buffer\n");
+
+    for (size_t vecsize = 0; vecsize < VECTOR_SIZE_COUNT; ++vecsize)
     {
-        programs[vecsize] = makeSelectProgram(&kernels[vecsize], context, stype, cmptype, element_count[vecsize] );
-        if (!programs[vecsize] || !kernels[vecsize]) {
-            ++s_test_fail;
-            ++s_test_cnt;
+        programs[vecsize] = makeSelectProgram(&kernels[vecsize], context, stype,
+                                              cmptype, element_count[vecsize]);
+        if (!programs[vecsize] || !kernels[vecsize])
+        {
             return -1;
+        }
+
+        err = clSetKernelArg(kernels[vecsize], 0, sizeof dest, &dest);
+        test_error_count(err, "Error: Cannot set kernel arg dest!\n");
+        err = clSetKernelArg(kernels[vecsize], 1, sizeof src1, &src1);
+        test_error_count(err, "Error: Cannot set kernel arg dest!\n");
+        err = clSetKernelArg(kernels[vecsize], 2, sizeof src2, &src2);
+        test_error_count(err, "Error: Cannot set kernel arg dest!\n");
+        err = clSetKernelArg(kernels[vecsize], 3, sizeof cmp, &cmp);
+        test_error_count(err, "Error: Cannot set kernel arg dest!\n");
+    }
+
+    std::vector<char> ref(BUFFER_SIZE);
+    std::vector<char> sref(BUFFER_SIZE);
+    std::vector<char> src1_host(BUFFER_SIZE);
+    std::vector<char> src2_host(BUFFER_SIZE);
+    std::vector<char> cmp_host(BUFFER_SIZE);
+    std::vector<char> dest_host(BUFFER_SIZE);
+
+    log_info("Testing...");
+
+    initSrcBuffer(src1_host.data(), stype, d);
+    initSrcBuffer(src2_host.data(), stype, d);
+    err = clEnqueueWriteBuffer(queue, src1, CL_FALSE, 0, BUFFER_SIZE,
+                               src1_host.data(), 0, NULL, NULL);
+    test_error_count(err, "Error: Could not write src1");
+
+    err = clEnqueueWriteBuffer(queue, src2, CL_FALSE, 0, BUFFER_SIZE,
+                               src2_host.data(), 0, NULL, NULL);
+    test_error_count(err, "Error: Could not write src2");
+
+
+    for (int vector_idx = 0; vector_idx < VECTOR_SIZE_COUNT; ++vector_idx)
+    {
+        const uint32_t vecsize = element_count[vector_idx];
+        const size_t vector_size = vecsize * type_size[stype];
+        const size_t vector_count = div_round_up(BUFFER_SIZE, vector_size);
+        const uint32_t full_msb_mask_elements = vecsize * (1u << vecsize);
+        const uint32_t min_cmp_elements = 64 * 1024;
+        const uint32_t nb_elements =
+            std::max(min_cmp_elements, full_msb_mask_elements);
+
+        for (uint32_t i = 0; i < nb_elements; i += block_elements)
+        {
+            initCmpBuffer(cmp_host.data(), cmptype, i, block_elements, vecsize,
+                          d);
+
+            err = clEnqueueWriteBuffer(queue, cmp, CL_FALSE, 0, BUFFER_SIZE,
+                                       cmp_host.data(), 0, NULL, NULL);
+            test_error_count(err, "Error: Could not write cmp");
+
+            Select sfunc = (cmptype == ctype[stype][0]) ? vrefSelects[stype][0]
+                                                        : vrefSelects[stype][1];
+            (*sfunc)(ref.data(), src1_host.data(), src2_host.data(),
+                     cmp_host.data(), block_elements);
+
+            sfunc = (cmptype == ctype[stype][0]) ? refSelects[stype][0]
+                                                 : refSelects[stype][1];
+            (*sfunc)(sref.data(), src1_host.data(), src2_host.data(),
+                     cmp_host.data(), block_elements);
+
+            const cl_int pattern = -1;
+            err = clEnqueueFillBuffer(queue, dest, &pattern, sizeof(cl_int), 0,
+                                      BUFFER_SIZE, 0, nullptr, nullptr);
+            test_error_count(err, "clEnqueueFillBuffer failed");
+
+
+            err = clEnqueueNDRangeKernel(queue, kernels[vector_idx], 1, NULL,
+                                         &vector_count, NULL, 0, NULL, NULL);
+            test_error_count(err, "clEnqueueNDRangeKernel failed errcode\n");
+
+            err = clEnqueueReadBuffer(queue, dest, CL_TRUE, 0, BUFFER_SIZE,
+                                      dest_host.data(), 0, NULL, NULL);
+            test_error_count(
+                err, "Error: Reading buffer from dest to dest_host failed\n");
+
+            if ((*checkResults[stype])(
+                    dest_host.data(),
+                    vector_idx == 0 ? sref.data() : ref.data(), block_elements,
+                    element_count[vector_idx])
+                != 0)
+            {
+                log_error("vec_size:%d indx: 0x%8x\n",
+                          (int)element_count[vector_idx], i);
+                return TEST_FAIL;
+            }
         }
     }
 
-    ref = malloc( BUFFER_SIZE );
-    if( NULL == ref ){ log_error("Error: could not allocate ref buffer\n" ); goto exit; }
-    sref = malloc( BUFFER_SIZE );
-    if( NULL == sref ){ log_error("Error: could not allocate ref buffer\n" ); goto exit; }
-    src1 = clCreateBuffer( context, CL_MEM_READ_ONLY, BUFFER_SIZE, NULL, &err );
-    if( err ) { log_error( "Error: could not allocate src1 buffer\n" );  ++s_test_fail; goto exit; }
-    src2 = clCreateBuffer( context, CL_MEM_READ_ONLY, BUFFER_SIZE, NULL, &err );
-    if( err ) { log_error( "Error: could not allocate src2 buffer\n" );  ++s_test_fail; goto exit; }
-    cmp = clCreateBuffer( context, CL_MEM_READ_ONLY, BUFFER_SIZE, NULL, &err );
-    if( err ) { log_error( "Error: could not allocate cmp buffer\n" );  ++s_test_fail; goto exit; }
-    dest = clCreateBuffer( context, CL_MEM_WRITE_ONLY, BUFFER_SIZE, NULL, &err );
-    if( err ) { log_error( "Error: could not allocate dest buffer\n" );  ++s_test_fail; goto exit; }
-
-
-    // We block the test as we are running over the range of compare values
-    // "block the test" means "break the test into blocks"
-    if( type_size[stype] == 4 )
-        cmp_stride = block_elements * step * (0x100000000ULL / 0x100000000ULL);
-    if( type_size[stype] == 8 )
-        cmp_stride = block_elements * step * (0xffffffffffffffffULL / 0x100000000ULL + 1);
-
-    log_info("Testing...");
-    d = init_genrand( gRandomSeed );
-    uint64_t i;
-    for (i=0; i < blocks; i+=step)
-    {
-        void *s1 = clEnqueueMapBuffer( queue, src1, CL_TRUE, CL_MAP_WRITE, 0, BUFFER_SIZE, 0, NULL, NULL, &err );
-        if( err ){ log_error( "Error: Could not map src1" ); goto exit; }
-        // Setup the input data to change for each block
-        initSrcBuffer( s1, stype, d);
-
-        void *s2 = clEnqueueMapBuffer( queue, src2, CL_TRUE, CL_MAP_WRITE, 0, BUFFER_SIZE, 0, NULL, NULL, &err );
-        if( err ){ log_error( "Error: Could not map src2" ); goto exit; }
-        // Setup the input data to change for each block
-        initSrcBuffer( s2, stype, d);
-
-        void *s3 = clEnqueueMapBuffer( queue, cmp, CL_TRUE, CL_MAP_WRITE, 0, BUFFER_SIZE, 0, NULL, NULL, &err );
-        if( err ){ log_error( "Error: Could not map cmp" ); goto exit; }
-        // Setup the input data to change for each block
-        initCmpBuffer(s3, cmptype, i * cmp_stride, block_elements);
-
-        // Create the reference result
-        Select sfunc = (cmptype == ctype[stype][0]) ? vrefSelects[stype][0] : vrefSelects[stype][1];
-        (*sfunc)(ref, s1, s2, s3, block_elements);
-
-        sfunc = (cmptype == ctype[stype][0]) ? refSelects[stype][0] : refSelects[stype][1];
-        (*sfunc)(sref, s1, s2, s3, block_elements);
-
-        if( (err = clEnqueueUnmapMemObject( queue, src1, s1, 0, NULL, NULL )))
-        { log_error( "Error: coult not unmap src1\n" );  ++s_test_fail; goto exit; }
-        if( (err = clEnqueueUnmapMemObject( queue, src2, s2, 0, NULL, NULL )))
-        { log_error( "Error: coult not unmap src2\n" );  ++s_test_fail; goto exit; }
-        if( (err = clEnqueueUnmapMemObject( queue, cmp, s3, 0, NULL, NULL )))
-        { log_error( "Error: coult not unmap cmp\n" );  ++s_test_fail; goto exit; }
-
-        for (vecsize = 0; vecsize < VECTOR_SIZE_COUNT; ++vecsize)
-        {
-            size_t vector_size = element_count[vecsize] * type_size[stype];
-            size_t vector_count =  (BUFFER_SIZE + vector_size - 1) / vector_size;
-
-            if((err = clSetKernelArg(kernels[vecsize], 0,  sizeof dest, &dest) ))
-            { log_error( "Error: Cannot set kernel arg dest! %d\n", err ); ++s_test_fail; goto exit; }
-            if((err = clSetKernelArg(kernels[vecsize], 1,  sizeof src1, &src1) ))
-            { log_error( "Error: Cannot set kernel arg dest! %d\n", err ); ++s_test_fail; goto exit; }
-            if((err = clSetKernelArg(kernels[vecsize], 2,  sizeof src2, &src2) ))
-            { log_error( "Error: Cannot set kernel arg dest! %d\n", err ); ++s_test_fail; goto exit; }
-            if((err = clSetKernelArg(kernels[vecsize], 3,  sizeof cmp, &cmp) ))
-            { log_error( "Error: Cannot set kernel arg dest! %d\n", err ); ++s_test_fail; goto exit; }
-
-
-            // Wipe destination
-            void *d = clEnqueueMapBuffer( queue, dest, CL_TRUE, CL_MAP_WRITE, 0, BUFFER_SIZE, 0, NULL, NULL, &err );
-            if( err ){ log_error( "Error: Could not map dest" );  ++s_test_fail; goto exit; }
-            memset( d, -1, BUFFER_SIZE );
-            if( (err = clEnqueueUnmapMemObject( queue, dest, d, 0, NULL, NULL ) ) ){ log_error( "Error: Could not unmap dest" ); ++s_test_fail; goto exit; }
-
-            err = clEnqueueNDRangeKernel(queue, kernels[vecsize], 1, NULL, &vector_count, NULL, 0, NULL, NULL);
-            if (err != CL_SUCCESS) {
-                log_error("clEnqueueNDRangeKernel failed errcode:%d\n", err);
-                ++s_test_fail;
-                goto exit;
-            }
-
-            d = clEnqueueMapBuffer( queue, dest, CL_TRUE, CL_MAP_READ, 0, BUFFER_SIZE, 0, NULL, NULL, &err );
-            if( err ){ log_error( "Error: Could not map dest # 2" );  ++s_test_fail; goto exit; }
-
-            if ((*checkResults[stype])(d, vecsize == 0 ? sref : ref, block_elements, element_count[vecsize])!=0){
-                log_error("vec_size:%d indx: 0x%16.16llx\n", (int)element_count[vecsize], i);
-                ++s_test_fail;
-                goto exit;
-            }
-
-            if( (err = clEnqueueUnmapMemObject( queue, dest, d, 0, NULL, NULL ) ) )
-            {
-                log_error( "Error: Could not unmap dest" );
-                ++s_test_fail;
-                goto exit;
-            }
-        } // for vecsize
-    } // for i
-
-    if (!s_wimpy_mode)
-        log_info(" Passed\n\n");
-    else
-        log_info(" Wimpy Passed\n\n");
-
-exit:
-    if( src1 )  clReleaseMemObject( src1 );
-    if( src2 )  clReleaseMemObject( src2 );
-    if( cmp )   clReleaseMemObject( cmp );
-    if( dest)   clReleaseMemObject( dest );
-    if( ref )   free(ref );
-    if( sref )  free(sref );
-
-    free_mtdata(d);
-    for (vecsize = 0; vecsize < VECTOR_SIZE_COUNT; vecsize++) {
-        clReleaseKernel(kernels[vecsize]);
-        clReleaseProgram(programs[vecsize]);
-    }
-    ++s_test_cnt;
     return err;
 }
 
-int test_select_uchar_uchar(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_uchar_uchar)
 {
-    return doTest(queue, context, kuchar, kuchar, deviceID);
+    return doTest(queue, context, kuchar, kuchar, device);
 }
-int test_select_uchar_char(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_uchar_char)
 {
-    return doTest(queue, context, kuchar, kchar, deviceID);
+    return doTest(queue, context, kuchar, kchar, device);
 }
-int test_select_char_uchar(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_char_uchar)
 {
-    return doTest(queue, context, kchar, kuchar, deviceID);
+    return doTest(queue, context, kchar, kuchar, device);
 }
-int test_select_char_char(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_char_char)
 {
-    return doTest(queue, context, kchar, kchar, deviceID);
+    return doTest(queue, context, kchar, kchar, device);
 }
-int test_select_ushort_ushort(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_ushort_ushort)
 {
-    return doTest(queue, context, kushort, kushort, deviceID);
+    return doTest(queue, context, kushort, kushort, device);
 }
-int test_select_ushort_short(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_ushort_short)
 {
-    return doTest(queue, context, kushort, kshort, deviceID);
+    return doTest(queue, context, kushort, kshort, device);
 }
-int test_select_short_ushort(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_short_ushort)
 {
-    return doTest(queue, context, kshort, kushort, deviceID);
+    return doTest(queue, context, kshort, kushort, device);
 }
-int test_select_short_short(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_short_short)
 {
-    return doTest(queue, context, kshort, kshort, deviceID);
+    return doTest(queue, context, kshort, kshort, device);
 }
-int test_select_uint_uint(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_half_ushort)
 {
-    return doTest(queue, context, kuint, kuint, deviceID);
+    return doTest(queue, context, khalf, kushort, device);
 }
-int test_select_uint_int(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_half_short)
 {
-    return doTest(queue, context, kuint, kint, deviceID);
+    return doTest(queue, context, khalf, kshort, device);
 }
-int test_select_int_uint(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_uint_uint)
 {
-    return doTest(queue, context, kint, kuint, deviceID);
+    return doTest(queue, context, kuint, kuint, device);
 }
-int test_select_int_int(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_uint_int)
 {
-    return doTest(queue, context, kint, kint, deviceID);
+    return doTest(queue, context, kuint, kint, device);
 }
-int test_select_float_uint(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_int_uint)
 {
-    return doTest(queue, context, kfloat, kuint, deviceID);
+    return doTest(queue, context, kint, kuint, device);
 }
-int test_select_float_int(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_int_int)
 {
-    return doTest(queue, context, kfloat, kint, deviceID);
+    return doTest(queue, context, kint, kint, device);
 }
-int test_select_ulong_ulong(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_float_uint)
 {
-    return doTest(queue, context, kulong, kulong, deviceID);
+    return doTest(queue, context, kfloat, kuint, device);
 }
-int test_select_ulong_long(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_float_int)
 {
-    return doTest(queue, context, kulong, klong, deviceID);
+    return doTest(queue, context, kfloat, kint, device);
 }
-int test_select_long_ulong(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_ulong_ulong)
 {
-    return doTest(queue, context, klong, kulong, deviceID);
+    return doTest(queue, context, kulong, kulong, device);
 }
-int test_select_long_long(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_ulong_long)
 {
-    return doTest(queue, context, klong, klong, deviceID);
+    return doTest(queue, context, kulong, klong, device);
 }
-int test_select_double_ulong(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_long_ulong)
 {
-    return doTest(queue, context, kdouble, kulong, deviceID);
+    return doTest(queue, context, klong, kulong, device);
 }
-int test_select_double_long(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(select_long_long)
 {
-    return doTest(queue, context, kdouble, klong, deviceID);
+    return doTest(queue, context, klong, klong, device);
+}
+REGISTER_TEST(select_double_ulong)
+{
+    return doTest(queue, context, kdouble, kulong, device);
+}
+REGISTER_TEST(select_double_long)
+{
+    return doTest(queue, context, kdouble, klong, device);
 }
 
-test_definition test_list[] = {
-    ADD_TEST( select_uchar_uchar ),
-    ADD_TEST( select_uchar_char ),
-    ADD_TEST( select_char_uchar ),
-    ADD_TEST( select_char_char ),
-    ADD_TEST( select_ushort_ushort ),
-    ADD_TEST( select_ushort_short ),
-    ADD_TEST( select_short_ushort ),
-    ADD_TEST( select_short_short ),
-    ADD_TEST( select_uint_uint ),
-    ADD_TEST( select_uint_int ),
-    ADD_TEST( select_int_uint ),
-    ADD_TEST( select_int_int ),
-    ADD_TEST( select_float_uint ),
-    ADD_TEST( select_float_int ),
-    ADD_TEST( select_ulong_ulong ),
-    ADD_TEST( select_ulong_long ),
-    ADD_TEST( select_long_ulong ),
-    ADD_TEST( select_long_long ),
-    ADD_TEST( select_double_ulong ),
-    ADD_TEST( select_double_long ),
-};
-
-const int test_num = ARRAY_SIZE( test_list );
-
-int main(int argc, const char* argv[])
+int main(int argc, const char *argv[])
 {
     test_start();
 
-    argc = parseCustomParam(argc, argv);
-    if (argc == -1)
-    {
-        return EXIT_FAILURE;
-    }
-
-    const char ** argList = (const char **)calloc( argc, sizeof( char*) );
-
-    if( NULL == argList )
-    {
-        log_error( "Failed to allocate memory for argList array.\n" );
-        return 1;
-    }
-
-    argList[0] = argv[0];
-    size_t argCount = 1;
-
-    for( int i = 1; i < argc; ++i )
-    {
-        const char *arg = argv[i];
-        if (arg == NULL)
-            break;
-
-        if (arg[0] == '-')
-        {
-            arg++;
-            while(*arg != '\0')
-            {
-                switch(*arg) {
-                    case 'h':
-                        printUsage();
-                        return 0;
-                    case 'w':
-                        s_wimpy_mode = true;
-                        break;
-                    case '[':
-                        parseWimpyReductionFactor(arg, s_wimpy_reduction_factor);
-                        break;
-                    default:
-                        break;
-                }
-                arg++;
-            }
-        }
-        else
-        {
-            argList[argCount] = arg;
-            argCount++;
-        }
-    }
-
-    if (getenv("CL_WIMPY_MODE")) {
-        s_wimpy_mode = true;
-    }
-
-    log_info( "Test binary built %s %s\n", __DATE__, __TIME__ );
-    if (s_wimpy_mode) {
-        log_info("\n");
-        log_info("*** WARNING: Testing in Wimpy mode!                     ***\n");
-        log_info("*** Wimpy mode is not sufficient to verify correctness. ***\n");
-        log_info("*** It gives warm fuzzy feelings and then nevers calls. ***\n\n");
-        log_info("*** Wimpy Reduction Factor: %-27u ***\n\n", s_wimpy_reduction_factor);
-    }
-
-    int err = runTestHarness(argCount, argList, test_num, test_list, false, 0);
-
-    free( argList );
-
-    return err;
+    return runTestHarness(argc, argv, test_registry::getInstance().num_tests(),
+                          test_registry::getInstance().definitions(), false, 0);
 }
-
-static void printUsage( void )
-{
-    log_info("test_select:  [-w] <optional: test_names> \n");
-    log_info("\tdefault is to run the full test on the default device\n");
-    log_info("\t-w run in wimpy mode (smoke test)\n");
-    log_info("\t-[2^n] Set wimpy reduction factor, recommended range of n is 1-12, default factor(%u)\n", s_wimpy_reduction_factor);
-    log_info("\n");
-    log_info("Test names:\n");
-    for( int i = 0; i < test_num; i++ )
-    {
-        log_info( "\t%s\n", test_list[i].name );
-    }
-}
-

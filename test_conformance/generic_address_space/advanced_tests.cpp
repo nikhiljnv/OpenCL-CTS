@@ -107,7 +107,32 @@ public:
             program = clCreateProgramWithSource(context, 1, &srcPtr, NULL, &error);
             test_error(error, "clCreateProgramWithSource failed");
 
-            error = clCompileProgram(program, 1, &deviceID, "-cl-std=CL2.0", 0, NULL, NULL, NULL, NULL);
+            // Use the latest OpenCL-C version supported by the device. This
+            // allows calling code to force a particular CL C version if it is
+            // required, but also means that callers need not specify a version
+            // if they want to assume the most recent CL C.
+
+            auto version = get_max_OpenCL_C_for_context(context);
+
+            const char* cl_std = nullptr;
+            if (version >= Version(3, 0))
+            {
+                cl_std = "-cl-std=CL3.0";
+            }
+            else if (version >= Version(2, 0) && version < Version(3, 0))
+            {
+                cl_std = "-cl-std=CL2.0";
+            }
+            else
+            {
+                // If the -cl-std build option is not specified, the highest
+                // OpenCL C 1.x language version supported by each device is
+                // used when compiling the program for each device.
+                cl_std = "";
+            }
+
+            error = clCompileProgram(program, 1, &deviceID, cl_std, 0, NULL,
+                                     NULL, NULL, NULL);
 
             if (error != CL_SUCCESS)
                 PrintCompilationLog(program, deviceID);
@@ -118,7 +143,8 @@ public:
             preCompiledLibrary = clCreateProgramWithSource(context, 1, &srcPtrLibrary, NULL, &error);
             test_error(error, "clCreateProgramWithSource failed");
 
-            error = clCompileProgram(preCompiledLibrary, 1, &deviceID, "-cl-std=CL2.0", 0, NULL, NULL, NULL, NULL);
+            error = clCompileProgram(preCompiledLibrary, 1, &deviceID, cl_std,
+                                     0, NULL, NULL, NULL, NULL);
 
             if (error != CL_SUCCESS)
                 PrintCompilationLog(preCompiledLibrary, deviceID);
@@ -136,7 +162,9 @@ public:
         }
 
         else {
-            if (create_single_kernel_helper_with_build_options(context, &program, &kernel, 1, &srcPtr, "testKernel", "-cl-std=CL2.0")) {
+            if (create_single_kernel_helper(context, &program, &kernel, 1,
+                                            &srcPtr, "testKernel"))
+            {
                 log_error("create_single_kernel_helper failed\n");
                 return -1;
             }
@@ -236,8 +264,10 @@ public:
         size_t passCount = std::count(results.begin(), results.end(), 1);
         if (passCount != results.size()) {
             std::vector<cl_uint>::iterator iter = std::find(results.begin(), results.end(), 0);
-            log_error("Verification on device failed at index %ld\n", std::distance(results.begin(), iter));
-            log_error("%ld out of %ld failed\n", (results.size()-passCount), results.size());
+            log_error("Verification on device failed at index %td\n",
+                      std::distance(results.begin(), iter));
+            log_error("%zu out of %zu failed\n", (results.size() - passCount),
+                      results.size());
             return -1;
         }
 
@@ -248,7 +278,8 @@ public:
         cl_int result = CL_SUCCESS;
 
         for (std::vector<std::string>::const_iterator it = _kernels.begin(); it != _kernels.end(); ++it) {
-            log_info("Executing subcase #%ld out of %ld\n", (it - _kernels.begin() + 1), _kernels.size());
+            log_info("Executing subcase #%zu out of %zu\n",
+                     (it - _kernels.begin() + 1), _kernels.size());
 
             result |= ExecuteSubcase(deviceID, context, queue, num_elements, *it);
         }
@@ -262,7 +293,8 @@ private:
     const ExtraKernelArgMemType _extraKernelArgMemType;
 };
 
-int test_library_function(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(library_function)
+{
     const std::string LIBRARY_FUNCTION = common::CONFORMANCE_VERIFY_FENCE +
         NL
         NL "bool helperFunction(float *floatp, float val) {"
@@ -276,38 +308,44 @@ int test_library_function(cl_device_id deviceID, cl_context context, cl_command_
         NL "}"
         NL;
 
-    const std::string KERNEL_FUNCTION =
-        NL
-        NL "extern bool helperFunction(float *floatp, float val);"
-        NL
-        NL "__global float gfloat = 1.0f;"
-        NL
-        NL "__kernel void testKernel(__global uint *results) {"
-        NL "    uint tid = get_global_id(0);"
-        NL
-        NL "    __global float *gfloatp = &gfloat;"
-        NL "    __local float lfloat;"
-        NL "    lfloat = 2.0f;"
-        NL "    __local float *lfloatp = &lfloat;"
-        NL "    float pfloat = 3.0f;"
-        NL "    __private float *pfloatp = &pfloat;"
-        NL
-        NL "    uint failures = 0;"
-        NL
-        NL "    failures += helperFunction(gfloatp, gfloat) ? 0 : 1;"
-        NL "    failures += helperFunction(lfloatp, lfloat) ? 0 : 1;"
-        NL "    failures += helperFunction(pfloatp, pfloat) ? 0 : 1;"
-        NL
-        NL "    results[tid] = failures == 0;"
-        NL "}"
-        NL;
+    const std::string KERNEL_FUNCTION = R"OpenCLC(
+extern bool helperFunction(float *floatp, float val);
+
+#ifdef __opencl_c_program_scope_global_variables
+__global float gfloat = 1.0f;
+#endif
+
+__kernel void testKernel(__global uint *results) {
+    uint tid = get_global_id(0);
+
+#ifdef __opencl_c_program_scope_global_variables
+    __global float *gfloatp = &gfloat;
+#endif
+    __local float lfloat;
+    lfloat = 2.0f;
+    __local float *lfloatp = &lfloat;
+    float pfloat = 3.0f;
+    __private float *pfloatp = &pfloat;
+
+    uint failures = 0;
+
+#ifdef __opencl_c_program_scope_global_variables
+    failures += helperFunction(gfloatp, gfloat) ? 0 : 1;
+#endif
+    failures += helperFunction(lfloatp, lfloat) ? 0 : 1;
+    failures += helperFunction(pfloatp, pfloat) ? 0 : 1;
+
+    results[tid] = failures == 0;
+};
+)OpenCLC";
 
     CAdvancedTest test(LIBRARY_FUNCTION, KERNEL_FUNCTION);
 
-    return test.Execute(deviceID, context, queue, num_elements);
+    return test.Execute(device, context, queue, num_elements);
 }
 
-int test_generic_variable_volatile(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(generic_variable_volatile)
+{
     std::vector<std::string> KERNEL_FUNCTIONS;
 
     KERNEL_FUNCTIONS.push_back(common::CONFORMANCE_VERIFY_FENCE +
@@ -384,10 +422,11 @@ int test_generic_variable_volatile(cl_device_id deviceID, cl_context context, cl
 
     CAdvancedTest test(KERNEL_FUNCTIONS);
 
-    return test.Execute(deviceID, context, queue, num_elements);
+    return test.Execute(device, context, queue, num_elements);
 }
 
-int test_generic_variable_const(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(generic_variable_const)
+{
     std::vector<std::string> KERNEL_FUNCTIONS;
 
     KERNEL_FUNCTIONS.push_back(common::CONFORMANCE_VERIFY_FENCE +
@@ -438,10 +477,11 @@ int test_generic_variable_const(cl_device_id deviceID, cl_context context, cl_co
 
     CAdvancedTest test(KERNEL_FUNCTIONS);
 
-    return test.Execute(deviceID, context, queue, num_elements);
+    return test.Execute(device, context, queue, num_elements);
 }
 
-int test_generic_variable_gentype(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(generic_variable_gentype)
+{
     const std::string KERNEL_FUNCTION_TEMPLATE = common::CONFORMANCE_VERIFY_FENCE +
         NL
         NL "%s"
@@ -495,7 +535,8 @@ int test_generic_variable_gentype(cl_device_id deviceID, cl_context context, cl_
     const std::string cl_khr_fp64_pragma = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable";
 
     // Add double floating types if they are supported
-    if (is_extension_available(deviceID, "cl_khr_fp64")) {
+    if (is_extension_available(device, "cl_khr_fp64"))
+    {
         for (size_t j = 0; j < sizeof(vector_sizes) / sizeof(vector_sizes[0]); j++) {
             for (size_t k = 0; k < sizeof(address_spaces) / sizeof(address_spaces[0]); k++) {
                 char temp_kernel[1024];
@@ -515,7 +556,8 @@ int test_generic_variable_gentype(cl_device_id deviceID, cl_context context, cl_
     const std::string cl_khr_fp16_pragma = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable";
 
     // Add half floating types if they are supported
-    if (is_extension_available(deviceID, "cl_khr_fp16")) {
+    if (is_extension_available(device, "cl_khr_fp16"))
+    {
         for (size_t j = 0; j < sizeof(vector_sizes) / sizeof(vector_sizes[0]); j++) {
             for (size_t k = 0; k < sizeof(address_spaces) / sizeof(address_spaces[0]); k++) {
                 char temp_kernel[1024];
@@ -550,7 +592,7 @@ int test_generic_variable_gentype(cl_device_id deviceID, cl_context context, cl_
 
     CAdvancedTest test(KERNEL_FUNCTIONS);
 
-    return test.Execute(deviceID, context, queue, num_elements);
+    return test.Execute(device, context, queue, num_elements);
 }
 
 void create_math_kernels(std::vector<std::string>& KERNEL_FUNCTIONS) {
@@ -883,19 +925,21 @@ void create_vstore_kernels(std::vector<std::string>& KERNEL_FUNCTIONS, cl_device
     }
 }
 
-int test_builtin_functions(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(builtin_functions)
+{
     std::vector<std::string> KERNEL_FUNCTIONS;
 
     create_math_kernels(KERNEL_FUNCTIONS);
-    create_vload_kernels(KERNEL_FUNCTIONS, deviceID);
-    create_vstore_kernels(KERNEL_FUNCTIONS, deviceID);
+    create_vload_kernels(KERNEL_FUNCTIONS, device);
+    create_vstore_kernels(KERNEL_FUNCTIONS, device);
 
     CAdvancedTest test(KERNEL_FUNCTIONS);
 
-    return test.Execute(deviceID, context, queue, num_elements);
+    return test.Execute(device, context, queue, num_elements);
 }
 
-int test_generic_advanced_casting(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(generic_advanced_casting)
+{
     std::vector<std::string> KERNEL_FUNCTIONS;
 
     KERNEL_FUNCTIONS.push_back(
@@ -944,18 +988,20 @@ int test_generic_advanced_casting(cl_device_id deviceID, cl_context context, cl_
 
     CAdvancedTest test(KERNEL_FUNCTIONS);
 
-    return test.Execute(deviceID, context, queue, num_elements);
+    return test.Execute(device, context, queue, num_elements);
 }
 
-int test_generic_ptr_to_host_mem_svm(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(generic_ptr_to_host_mem_svm)
+{
     cl_int result = CL_SUCCESS;
 
     /* Test SVM capabilities and select matching tests */
     cl_device_svm_capabilities caps;
-    auto version = get_device_cl_version(deviceID);
+    auto version = get_device_cl_version(device);
     auto expected_min_version = Version(2, 0);
 
-    cl_int error = clGetDeviceInfo(deviceID, CL_DEVICE_SVM_CAPABILITIES, sizeof(caps), &caps, NULL);
+    cl_int error = clGetDeviceInfo(device, CL_DEVICE_SVM_CAPABILITIES,
+                                   sizeof(caps), &caps, NULL);
     test_error(error, "clGetDeviceInfo(CL_DEVICE_SVM_CAPABILITIES) failed");
 
     if ((version < expected_min_version)
@@ -964,35 +1010,40 @@ int test_generic_ptr_to_host_mem_svm(cl_device_id deviceID, cl_context context, 
 
     if (caps & CL_DEVICE_SVM_COARSE_GRAIN_BUFFER) {
         CAdvancedTest test_global_svm_ptr(common::GLOBAL_KERNEL_FUNCTION, ARG_TYPE_COARSE_GRAINED_SVM);
-        result |= test_global_svm_ptr.Execute(deviceID, context, queue, num_elements);
+        result |=
+            test_global_svm_ptr.Execute(device, context, queue, num_elements);
     }
 
     if (caps & CL_DEVICE_SVM_FINE_GRAIN_BUFFER) {
         CAdvancedTest test_global_svm_ptr(common::GLOBAL_KERNEL_FUNCTION, ARG_TYPE_FINE_GRAINED_BUFFER_SVM);
-        result |= test_global_svm_ptr.Execute(deviceID, context, queue, num_elements);
+        result |=
+            test_global_svm_ptr.Execute(device, context, queue, num_elements);
     }
 
     if (caps & CL_DEVICE_SVM_FINE_GRAIN_SYSTEM) {
         CAdvancedTest test_global_svm_ptr(common::GLOBAL_KERNEL_FUNCTION, ARG_TYPE_FINE_GRAINED_SYSTEM_SVM);
-        result |= test_global_svm_ptr.Execute(deviceID, context, queue, num_elements);
+        result |=
+            test_global_svm_ptr.Execute(device, context, queue, num_elements);
     }
 
     if (caps & CL_DEVICE_SVM_ATOMICS) {
         CAdvancedTest test_global_svm_ptr(common::GLOBAL_KERNEL_FUNCTION, ARG_TYPE_ATOMICS_SVM);
-        result |= test_global_svm_ptr.Execute(deviceID, context, queue, num_elements);
+        result |=
+            test_global_svm_ptr.Execute(device, context, queue, num_elements);
     }
 
     return result;
 }
 
-int test_generic_ptr_to_host_mem(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements) {
+REGISTER_TEST(generic_ptr_to_host_mem)
+{
     cl_int result = CL_SUCCESS;
 
     CAdvancedTest test_global_ptr(common::GLOBAL_KERNEL_FUNCTION, ARG_TYPE_HOST_PTR);
-    result |= test_global_ptr.Execute(deviceID, context, queue, num_elements);
+    result |= test_global_ptr.Execute(device, context, queue, num_elements);
 
     CAdvancedTest test_local_ptr(common::LOCAL_KERNEL_FUNCTION, ARG_TYPE_HOST_LOCAL);
-    result |= test_local_ptr.Execute(deviceID, context, queue, num_elements / 64);
+    result |= test_local_ptr.Execute(device, context, queue, num_elements / 64);
 
     return result;
 }

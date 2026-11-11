@@ -20,8 +20,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-
-#include "procs.h"
+#include "testBase.h"
 
 const char *copy_kernel_code =
 "__kernel void test_copy(__global unsigned int *src, __global unsigned int *dst)\n"
@@ -31,14 +30,13 @@ const char *copy_kernel_code =
 "    dst[tid] = src[tid];\n"
 "}\n";
 
-int
-test_arraycopy(cl_device_id device, cl_context context, cl_command_queue queue, int n_elems)
+REGISTER_TEST(arraycopy)
 {
     cl_uint    *input_ptr, *output_ptr;
     cl_mem                streams[4], results;
     cl_program          program;
     cl_kernel            kernel;
-    unsigned            num_elements = 128 * 1024;
+    num_elements = 128 * 1024;
     cl_uint             num_copies = 1;
     size_t                delta_offset;
     unsigned            i;
@@ -91,18 +89,21 @@ test_arraycopy(cl_device_id device, cl_context context, cl_command_queue queue, 
         }
     }
 
+    clReleaseMemObject(streams[0]);
+
     if (err)
-        log_error("\tCL_MEM_USE_HOST_PTR buffer with clEnqueueCopyBuffer FAILED\n");
+        log_error(
+            "\tCL_MEM_USE_HOST_PTR buffer with clEnqueueCopyBuffer FAILED\n");
     else
-        log_info("\tCL_MEM_USE_HOST_PTR buffer with clEnqueueCopyBuffer passed\n");
-
-
+        log_info(
+            "\tCL_MEM_USE_HOST_PTR buffer with clEnqueueCopyBuffer passed\n");
 
 #pragma mark framework backing (no client data)
 
     log_info("Testing with clEnqueueWriteBuffer and clEnqueueCopyBuffer\n");
+
     // randomize data
-    for (i=0; i<num_elements; i++)
+    for (i = 0; i < num_elements; i++)
         input_ptr[i] = (cl_uint)(genrand_int32(d) & 0x7FFFFFFF);
 
     // no backing
@@ -163,7 +164,7 @@ test_arraycopy(cl_device_id device, cl_context context, cl_command_queue queue, 
     err |= clSetKernelArg(kernel, 1, sizeof results, &results);
     test_error(err, "clSetKernelArg failed");
 
-    size_t threads[3] = { num_elements, 0, 0 };
+    size_t threads[3] = { static_cast<size_t>(num_elements), 0, 0 };
 
     err = clEnqueueNDRangeKernel( queue, kernel, 1, NULL, threads, NULL, 0, NULL, NULL );
   test_error(err, "clEnqueueNDRangeKernel failed");
@@ -181,28 +182,22 @@ test_arraycopy(cl_device_id device, cl_context context, cl_command_queue queue, 
         }
     }
 
-  // Keep track of multiple errors.
-  if (error_count != 0)
-    err = error_count;
-
     if (err)
         log_error("\tCL_MEM_USE_HOST_PTR buffer with kernel copy FAILED\n");
     else
         log_info("\tCL_MEM_USE_HOST_PTR buffer with kernel copy passed\n");
 
+    // Keep track of multiple errors.
+    if (error_count != 0) err = error_count;
 
-  clReleaseProgram(program);
-  clReleaseKernel(kernel);
-  clReleaseMemObject(results);
-  clReleaseMemObject(streams[0]);
-  clReleaseMemObject(streams[2]);
-  clReleaseMemObject(streams[3]);
+    clReleaseProgram(program);
+    clReleaseKernel(kernel);
+    clReleaseMemObject(results);
+    clReleaseMemObject(streams[2]);
+    clReleaseMemObject(streams[3]);
 
-  free(input_ptr);
-  free(output_ptr);
+    free(input_ptr);
+    free(output_ptr);
 
     return err;
 }
-
-
-

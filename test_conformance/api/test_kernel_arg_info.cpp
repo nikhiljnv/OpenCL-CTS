@@ -22,11 +22,8 @@
 
 #define MINIMUM_OPENCL_PIPE_VERSION Version(2, 0)
 
-static constexpr size_t CL_VERSION_LENGTH = 128;
 static constexpr size_t KERNEL_ARGUMENT_LENGTH = 128;
 static constexpr char KERNEL_ARGUMENT_NAME[] = "argument";
-static constexpr size_t KERNEL_ARGUMENT_NAME_LENGTH =
-    sizeof(KERNEL_ARGUMENT_NAME) + 1;
 static constexpr int SINGLE_KERNEL_ARG_NUMBER = 0;
 static constexpr int MAX_NUMBER_OF_KERNEL_ARGS = 128;
 
@@ -181,9 +178,8 @@ static std::string generate_kernel(const std::vector<KernelArgInfo>& all_args,
         ret += "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n";
     }
     ret += "kernel void get_kernel_arg_info(\n";
-    for (int i = 0; i < all_args.size(); ++i)
+    for (size_t i = 0; i < all_args.size(); ++i)
     {
-        const KernelArgInfo& arg = all_args[i];
         ret += generate_argument(all_args[i]);
         if (i == all_args.size() - 1)
         {
@@ -304,16 +300,16 @@ static int compare_expected_actual(const KernelArgInfo& expected,
     return ret;
 }
 
-static bool device_supports_pipes(cl_device_id deviceID)
+static bool device_supports_pipes(cl_device_id device)
 {
-    auto version = get_device_cl_version(deviceID);
+    auto version = get_device_cl_version(device);
     if (version < MINIMUM_OPENCL_PIPE_VERSION)
     {
         return false;
     }
     cl_uint max_packet_size = 0;
     cl_int err =
-        clGetDeviceInfo(deviceID, CL_DEVICE_PIPE_MAX_PACKET_SIZE,
+        clGetDeviceInfo(device, CL_DEVICE_PIPE_MAX_PACKET_SIZE,
                         sizeof(max_packet_size), &max_packet_size, nullptr);
     test_error_ret(err, "clGetDeviceInfo", false);
     if ((max_packet_size == 0) && (version >= Version(3, 0)))
@@ -323,14 +319,14 @@ static bool device_supports_pipes(cl_device_id deviceID)
     return true;
 }
 
-static std::string get_build_options(cl_device_id deviceID)
+static std::string get_build_options(cl_device_id device)
 {
     std::string ret = "-cl-kernel-arg-info";
-    if (get_device_cl_version(deviceID) >= MINIMUM_OPENCL_PIPE_VERSION)
+    if (get_device_cl_version(device) >= MINIMUM_OPENCL_PIPE_VERSION)
     {
-        if (device_supports_pipes(deviceID))
+        if (device_supports_pipes(device))
         {
-            if (get_device_cl_version(deviceID) >= Version(3, 0))
+            if (get_device_cl_version(device) >= Version(3, 0))
             {
                 ret += " -cl-std=CL3.0";
             }
@@ -439,8 +435,7 @@ create_expected_arg_info(const KernelArgInfo& kernel_argument, bool is_pointer)
 /* There are too many vector arguments for it to be worth writing down
  * statically and are instead generated here and combined with all of the scalar
  * and unsigned scalar types in a single data structure */
-static std::vector<std::string>
-generate_all_type_arguments(cl_device_id deviceID)
+static std::vector<std::string> generate_all_type_arguments(cl_device_id device)
 {
     std::vector<std::string> ret = {
         "char",           "short",        "int",           "float",
@@ -464,11 +459,11 @@ generate_all_type_arguments(cl_device_id deviceID)
         vector_types.push_back("long");
         vector_types.push_back("ulong");
     }
-    if (device_supports_half(deviceID))
+    if (device_supports_half(device))
     {
         vector_types.push_back("half");
     }
-    if (device_supports_double(deviceID))
+    if (device_supports_double(device))
     {
         vector_types.push_back("double");
     }
@@ -485,18 +480,18 @@ generate_all_type_arguments(cl_device_id deviceID)
 }
 
 static int
-compare_kernel_with_expected(cl_context context, cl_device_id deviceID,
+compare_kernel_with_expected(cl_context context, cl_device_id device,
                              const char* kernel_src,
                              const std::vector<KernelArgInfo>& expected_args)
 {
     int failed_tests = 0;
     clKernelWrapper kernel;
     clProgramWrapper program;
-    cl_int err = create_single_kernel_helper_with_build_options(
-        context, &program, &kernel, 1, &kernel_src, "get_kernel_arg_info",
-        get_build_options(deviceID).c_str());
-    test_error(err, "create_single_kernel_helper_with_build_options");
-    for (int i = 0; i < expected_args.size(); ++i)
+    cl_int err = create_single_kernel_helper(context, &program, &kernel, 1,
+                                             &kernel_src, "get_kernel_arg_info",
+                                             get_build_options(device).c_str());
+    test_error(err, "create_single_kernel_helper");
+    for (size_t i = 0; i < expected_args.size(); ++i)
     {
         KernelArgInfo actual;
         err = clGetKernelArgInfo(kernel, i, CL_KERNEL_ARG_ADDRESS_QUALIFIER,
@@ -529,7 +524,7 @@ compare_kernel_with_expected(cl_context context, cl_device_id deviceID,
     return failed_tests;
 }
 
-size_t get_param_size(const std::string& arg_type, cl_device_id deviceID,
+size_t get_param_size(const std::string& arg_type, cl_device_id device,
                       bool is_pipe)
 {
     if (is_pipe)
@@ -539,9 +534,10 @@ size_t get_param_size(const std::string& arg_type, cl_device_id deviceID,
     if (arg_type.find("*") != std::string::npos)
     {
         cl_uint device_address_bits = 0;
-        cl_int err = clGetDeviceInfo(deviceID, CL_DEVICE_ADDRESS_BITS,
+        cl_int err = clGetDeviceInfo(device, CL_DEVICE_ADDRESS_BITS,
                                      sizeof(device_address_bits),
                                      &device_address_bits, NULL);
+        test_error_ret(err, "clGetDeviceInfo", 0);
         return (device_address_bits / 8);
     }
 
@@ -598,12 +594,12 @@ size_t get_param_size(const std::string& arg_type, cl_device_id deviceID,
     return ret;
 }
 
-static int run_scalar_vector_tests(cl_context context, cl_device_id deviceID)
+static int run_scalar_vector_tests(cl_context context, cl_device_id device)
 {
     int failed_tests = 0;
 
     std::vector<std::string> type_arguments =
-        generate_all_type_arguments(deviceID);
+        generate_all_type_arguments(device);
 
     const std::vector<cl_kernel_arg_access_qualifier> access_qualifiers = {
         CL_KERNEL_ARG_ACCESS_NONE, CL_KERNEL_ARG_ACCESS_READ_ONLY,
@@ -611,7 +607,7 @@ static int run_scalar_vector_tests(cl_context context, cl_device_id deviceID)
     };
 
     std::vector<KernelArgInfo> all_args, expected_args;
-    size_t max_param_size = get_max_param_size(deviceID);
+    size_t max_param_size = get_max_param_size(device);
     size_t total_param_size(0);
     for (auto address_qualifier : address_qualifiers)
     {
@@ -674,15 +670,14 @@ static int run_scalar_vector_tests(cl_context context, cl_device_id deviceID)
                         arg_type += "*";
                     }
                     size_t param_size =
-                        get_param_size(arg_type, deviceID, is_pipe);
+                        get_param_size(arg_type, device, is_pipe);
                     if (param_size + total_param_size >= max_param_size
                         || all_args.size() == MAX_NUMBER_OF_KERNEL_ARGS)
                     {
                         const std::string kernel_src = generate_kernel(
-                            all_args, false, device_supports_half(deviceID));
+                            all_args, false, device_supports_half(device));
                         failed_tests += compare_kernel_with_expected(
-                            context, deviceID, kernel_src.c_str(),
-                            expected_args);
+                            context, device, kernel_src.c_str(), expected_args);
                         all_args.clear();
                         expected_args.clear();
                         total_param_size = 0;
@@ -702,36 +697,36 @@ static int run_scalar_vector_tests(cl_context context, cl_device_id deviceID)
         }
     }
     const std::string kernel_src =
-        generate_kernel(all_args, false, device_supports_half(deviceID));
+        generate_kernel(all_args, false, device_supports_half(device));
     failed_tests += compare_kernel_with_expected(
-        context, deviceID, kernel_src.c_str(), expected_args);
+        context, device, kernel_src.c_str(), expected_args);
     return failed_tests;
 }
 
-static cl_uint get_max_number_of_pipes(cl_device_id deviceID, cl_int& err)
+static cl_uint get_max_number_of_pipes(cl_device_id device, cl_int& err)
 {
     cl_uint ret(0);
-    err = clGetDeviceInfo(deviceID, CL_DEVICE_MAX_PIPE_ARGS, sizeof(ret), &ret,
+    err = clGetDeviceInfo(device, CL_DEVICE_MAX_PIPE_ARGS, sizeof(ret), &ret,
                           nullptr);
     return ret;
 }
 
-static int run_pipe_tests(cl_context context, cl_device_id deviceID)
+static int run_pipe_tests(cl_context context, cl_device_id device)
 {
     int failed_tests = 0;
 
     cl_kernel_arg_address_qualifier address_qualifier =
         CL_KERNEL_ARG_ADDRESS_PRIVATE;
     std::vector<std::string> type_arguments =
-        generate_all_type_arguments(deviceID);
+        generate_all_type_arguments(device);
     const std::vector<cl_kernel_arg_access_qualifier> access_qualifiers = {
         CL_KERNEL_ARG_ACCESS_READ_ONLY, CL_KERNEL_ARG_ACCESS_WRITE_ONLY
     };
     std::vector<KernelArgInfo> all_args, expected_args;
-    size_t max_param_size = get_max_param_size(deviceID);
+    size_t max_param_size = get_max_param_size(device);
     size_t total_param_size(0);
     cl_int err = CL_SUCCESS;
-    cl_uint max_number_of_pipes = get_max_number_of_pipes(deviceID, err);
+    cl_uint max_number_of_pipes = get_max_number_of_pipes(device, err);
     test_error_ret(err, "get_max_number_of_pipes", TEST_FAIL);
     cl_uint number_of_pipes(0);
 
@@ -750,13 +745,13 @@ static int run_pipe_tests(cl_context context, cl_device_id deviceID)
                     continue;
                 }
 
-                size_t param_size = get_param_size(arg_type, deviceID, is_pipe);
+                size_t param_size = get_param_size(arg_type, device, is_pipe);
                 if (param_size + total_param_size >= max_param_size
                     || number_of_pipes == max_number_of_pipes)
                 {
                     const std::string kernel_src = generate_kernel(all_args);
                     failed_tests += compare_kernel_with_expected(
-                        context, deviceID, kernel_src.c_str(), expected_args);
+                        context, device, kernel_src.c_str(), expected_args);
                     all_args.clear();
                     expected_args.clear();
                     total_param_size = 0;
@@ -778,11 +773,11 @@ static int run_pipe_tests(cl_context context, cl_device_id deviceID)
     }
     const std::string kernel_src = generate_kernel(all_args);
     failed_tests += compare_kernel_with_expected(
-        context, deviceID, kernel_src.c_str(), expected_args);
+        context, device, kernel_src.c_str(), expected_args);
     return failed_tests;
 }
 
-static int run_sampler_test(cl_context context, cl_device_id deviceID)
+static int run_sampler_test(cl_context context, cl_device_id device)
 {
     cl_kernel_arg_address_qualifier address_qualifier =
         CL_KERNEL_ARG_ADDRESS_PRIVATE;
@@ -800,22 +795,48 @@ static int run_sampler_test(cl_context context, cl_device_id deviceID)
 
     const std::string kernel_src = generate_kernel({ kernel_argument });
 
-    return compare_kernel_with_expected(context, deviceID, kernel_src.c_str(),
+    return compare_kernel_with_expected(context, device, kernel_src.c_str(),
                                         { expected });
 }
 
-static int run_image_tests(cl_context context, cl_device_id deviceID)
+static int run_image_tests(cl_context context, cl_device_id device)
 {
     int failed_tests = 0;
     bool supports_3d_image_writes =
-        is_extension_available(deviceID, "cl_khr_3d_image_writes");
+        is_extension_available(device, "cl_khr_3d_image_writes");
     bool is_pointer = false;
     cl_kernel_arg_type_qualifier type_qualifier = CL_KERNEL_ARG_TYPE_NONE;
     cl_kernel_arg_address_qualifier address_qualifier =
         CL_KERNEL_ARG_ADDRESS_GLOBAL;
 
+    Version version = get_device_cl_version(device);
+    bool supports_read_write_images = false;
+    if (version >= Version(3, 0))
+    {
+        cl_uint maxReadWriteImageArgs = 0;
+        cl_int error = clGetDeviceInfo(
+            device, CL_DEVICE_MAX_READ_WRITE_IMAGE_ARGS,
+            sizeof(maxReadWriteImageArgs), &maxReadWriteImageArgs, NULL);
+        test_error(error,
+                   "Unable to query "
+                   "CL_DEVICE_MAX_READ_WRITE_IMAGE_ARGS");
+
+        // read-write images are supported if MAX_READ_WRITE_IMAGE_ARGS is
+        // nonzero
+        supports_read_write_images = maxReadWriteImageArgs != 0;
+    }
+    else if (version >= Version(2, 0))
+    {
+        // read-write images are required for OpenCL 2.x
+        supports_read_write_images = true;
+    }
+
     for (auto access_qualifier : access_qualifiers)
     {
+        if (access_qualifier == CL_KERNEL_ARG_ACCESS_READ_WRITE
+            && !supports_read_write_images)
+            continue;
+
         bool is_write =
             (access_qualifier == CL_KERNEL_ARG_ACCESS_WRITE_ONLY
              || access_qualifier == CL_KERNEL_ARG_ACCESS_READ_WRITE);
@@ -839,25 +860,24 @@ static int run_image_tests(cl_context context, cl_device_id deviceID)
                 generate_kernel({ kernel_argument }, supports_3d_image_writes);
 
             failed_tests += compare_kernel_with_expected(
-                context, deviceID, kernel_src.c_str(), { expected });
+                context, device, kernel_src.c_str(), { expected });
         }
     }
-    failed_tests += run_sampler_test(context, deviceID);
+    failed_tests += run_sampler_test(context, device);
     return failed_tests;
 }
 
 /* Ensure clGetKernelArgInfo returns successfully when param_value is
  * set to null */
-static int test_null_param(cl_context context, cl_device_id deviceID,
+static int test_null_param(cl_context context, cl_device_id device,
                            char const* kernel_src)
 {
     clProgramWrapper program;
     clKernelWrapper kernel;
-    cl_int err = create_single_kernel_helper_with_build_options(
-        context, &program, &kernel, 1, &kernel_src, "get_kernel_arg_info",
-        get_build_options(deviceID).c_str());
-    test_error_ret(err, "create_single_kernel_helper_with_build_options",
-                   TEST_FAIL);
+    cl_int err = create_single_kernel_helper(context, &program, &kernel, 1,
+                                             &kernel_src, "get_kernel_arg_info",
+                                             get_build_options(device).c_str());
+    test_error_ret(err, "create_single_kernel_helper", TEST_FAIL);
 
     err = clGetKernelArgInfo(kernel, SINGLE_KERNEL_ARG_NUMBER,
                              CL_KERNEL_ARG_ADDRESS_QUALIFIER, 0, nullptr,
@@ -886,7 +906,7 @@ static int test_null_param(cl_context context, cl_device_id deviceID,
 
 /* Ensure clGetKernelArgInfo returns the correct size in bytes for the
  * kernel arg name */
-static int test_arg_name_size(cl_context context, cl_device_id deviceID,
+static int test_arg_name_size(cl_context context, cl_device_id device,
                               char const* kernel_src)
 {
     size_t size;
@@ -895,12 +915,11 @@ static int test_arg_name_size(cl_context context, cl_device_id deviceID,
     char arg_return[sizeof(KERNEL_ARGUMENT_NAME) + 1];
     clProgramWrapper program;
     clKernelWrapper kernel;
-    cl_int err = create_single_kernel_helper_with_build_options(
-        context, &program, &kernel, 1, &kernel_src, "get_kernel_arg_info",
-        get_build_options(deviceID).c_str());
+    cl_int err = create_single_kernel_helper(context, &program, &kernel, 1,
+                                             &kernel_src, "get_kernel_arg_info",
+                                             get_build_options(device).c_str());
 
-    test_error_ret(err, "create_single_kernel_helper_with_build_options",
-                   TEST_FAIL);
+    test_error_ret(err, "create_single_kernel_helper", TEST_FAIL);
 
     err =
         clGetKernelArgInfo(kernel, SINGLE_KERNEL_ARG_NUMBER, CL_KERNEL_ARG_NAME,
@@ -916,7 +935,7 @@ static int test_arg_name_size(cl_context context, cl_device_id deviceID,
     }
 }
 
-static int run_boundary_tests(cl_context context, cl_device_id deviceID)
+static int run_boundary_tests(cl_context context, cl_device_id device)
 {
     int failed_tests = 0;
 
@@ -929,9 +948,9 @@ static int run_boundary_tests(cl_context context, cl_device_id deviceID)
                            arg_type, SINGLE_KERNEL_ARG_NUMBER);
     const std::string kernel_src = generate_kernel({ arg_info });
 
-    failed_tests += test_arg_name_size(context, deviceID, kernel_src.c_str());
+    failed_tests += test_arg_name_size(context, device, kernel_src.c_str());
 
-    if (test_null_param(context, deviceID, kernel_src.c_str()) != TEST_PASS)
+    if (test_null_param(context, device, kernel_src.c_str()) != TEST_PASS)
     {
         failed_tests++;
     }
@@ -939,10 +958,10 @@ static int run_boundary_tests(cl_context context, cl_device_id deviceID)
     return failed_tests;
 }
 
-static int run_all_tests(cl_context context, cl_device_id deviceID)
+static int run_all_tests(cl_context context, cl_device_id device)
 {
 
-    int failed_scalar_tests = run_scalar_vector_tests(context, deviceID);
+    int failed_scalar_tests = run_scalar_vector_tests(context, device);
     if (failed_scalar_tests == 0)
     {
         log_info("All Data Type Tests Passed\n");
@@ -953,9 +972,9 @@ static int run_all_tests(cl_context context, cl_device_id deviceID)
     }
 
     int failed_image_tests = 0;
-    if (checkForImageSupport(deviceID) == 0)
+    if (checkForImageSupport(device) == 0)
     {
-        failed_image_tests = run_image_tests(context, deviceID);
+        failed_image_tests = run_image_tests(context, device);
         if (failed_image_tests == 0)
         {
             log_info("All Image Tests Passed\n");
@@ -969,7 +988,7 @@ static int run_all_tests(cl_context context, cl_device_id deviceID)
     // TODO https://github.com/KhronosGroup/OpenCL-CTS/issues/1244
     if (false)
     {
-        failed_pipe_tests = run_pipe_tests(context, deviceID);
+        failed_pipe_tests = run_pipe_tests(context, device);
         if (failed_pipe_tests == 0)
         {
             log_info("All Pipe Tests Passed\n");
@@ -980,7 +999,7 @@ static int run_all_tests(cl_context context, cl_device_id deviceID)
         }
     }
 
-    int failed_boundary_tests = run_boundary_tests(context, deviceID);
+    int failed_boundary_tests = run_boundary_tests(context, device);
     if (failed_boundary_tests == 0)
     {
         log_info("All Edge Case Tests Passed\n");
@@ -994,10 +1013,9 @@ static int run_all_tests(cl_context context, cl_device_id deviceID)
             + failed_boundary_tests);
 }
 
-int test_get_kernel_arg_info(cl_device_id deviceID, cl_context context,
-                             cl_command_queue queue, int num_elements)
+REGISTER_TEST(get_kernel_arg_info)
 {
-    int failed_tests = run_all_tests(context, deviceID);
+    int failed_tests = run_all_tests(context, device);
     if (failed_tests != 0)
     {
         log_error("%d Test(s) Failed\n", failed_tests);

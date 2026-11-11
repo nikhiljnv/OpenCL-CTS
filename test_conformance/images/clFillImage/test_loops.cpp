@@ -18,50 +18,87 @@
 
 extern int gTypesToTest;
 
-extern int test_fill_image_set_1D( cl_device_id device, cl_context context, cl_command_queue queue, cl_image_format *format, ExplicitType outputType );
-extern int test_fill_image_set_2D( cl_device_id device, cl_context context, cl_command_queue queue, cl_image_format *format, ExplicitType outputType );
-extern int test_fill_image_set_3D( cl_device_id device, cl_context context, cl_command_queue queue, cl_image_format *format, ExplicitType outputType );
-extern int test_fill_image_set_1D_array( cl_device_id device, cl_context context, cl_command_queue queue, cl_image_format *format, ExplicitType outputType );
-extern int test_fill_image_set_2D_array( cl_device_id device, cl_context context, cl_command_queue queue, cl_image_format *format, ExplicitType outputType );
+extern int test_fill_image_set_1D(cl_device_id device, cl_context context,
+                                  cl_command_queue queue,
+                                  cl_image_format *format,
+                                  cl_mem_flags mem_flags,
+                                  ExplicitType outputType,
+                                  const image_test_context_t &ctx);
+extern int test_fill_image_set_2D(cl_device_id device, cl_context context,
+                                  cl_command_queue queue,
+                                  cl_image_format *format,
+                                  cl_mem_flags mem_flags,
+                                  ExplicitType outputType,
+                                  const image_test_context_t &ctx);
+extern int test_fill_image_set_3D(cl_device_id device, cl_context context,
+                                  cl_command_queue queue,
+                                  cl_image_format *format,
+                                  cl_mem_flags mem_flags,
+                                  ExplicitType outputType,
+                                  const image_test_context_t &ctx);
+extern int test_fill_image_set_1D_array(cl_device_id device, cl_context context,
+                                        cl_command_queue queue,
+                                        cl_image_format *format,
+                                        cl_mem_flags mem_flags,
+                                        ExplicitType outputType,
+                                        const image_test_context_t &ctx);
+extern int test_fill_image_set_2D_array(cl_device_id device, cl_context context,
+                                        cl_command_queue queue,
+                                        cl_image_format *format,
+                                        cl_mem_flags mem_flags,
+                                        ExplicitType outputType,
+                                        const image_test_context_t &ctx);
+extern int
+test_fill_image_set_1D_buffer(cl_device_id device, cl_context context,
+                              cl_command_queue queue, cl_image_format *format,
+                              cl_mem_flags mem_flags, ExplicitType outputType,
+                              const image_test_context_t &ctx);
 typedef int (*test_func)(cl_device_id device, cl_context context,
                          cl_command_queue queue, cl_image_format *format,
-                         ExplicitType outputType);
+                         cl_mem_flags mem_flags, ExplicitType outputType,
+                         const image_test_context_t &ctx);
 
-int test_image_type( cl_device_id device, cl_context context, cl_command_queue queue, MethodsToTest testMethod, cl_mem_flags flags )
+int test_image_type(cl_device_id device, cl_context context,
+                    cl_command_queue queue, MethodsToTest testMethod,
+                    cl_mem_flags flags, const image_test_context_t &ctx)
 {
     const char *name;
     cl_mem_object_type imageType;
     test_func test_fn;
 
-    if ( testMethod == k1D )
+    switch (testMethod)
     {
-        name = "1D Image Fill";
-        imageType = CL_MEM_OBJECT_IMAGE1D;
-        test_fn = &test_fill_image_set_1D;
-    }
-    else if ( testMethod == k2D )
-    {
-        name = "2D Image Fill";
-        imageType = CL_MEM_OBJECT_IMAGE2D;
-        test_fn = &test_fill_image_set_2D;
-    }
-    else if ( testMethod == k1DArray )
-    {
-        name = "1D Image Array Fill";
-        imageType = CL_MEM_OBJECT_IMAGE1D_ARRAY;
-        test_fn = &test_fill_image_set_1D_array;
-    }
-    else if ( testMethod == k2DArray )
-    {
-        name = "2D Image Array Fill";
-        imageType = CL_MEM_OBJECT_IMAGE2D_ARRAY;
-        test_fn = &test_fill_image_set_2D_array;
-    }
-    else if ( testMethod == k3D )
-    {
-        name = "3D Image Fill";
-        imageType = CL_MEM_OBJECT_IMAGE3D;
-        test_fn = &test_fill_image_set_3D;
+        case k1D:
+            name = "1D Image Fill";
+            imageType = CL_MEM_OBJECT_IMAGE1D;
+            test_fn = &test_fill_image_set_1D;
+            break;
+        case k2D:
+            name = "2D Image Fill";
+            imageType = CL_MEM_OBJECT_IMAGE2D;
+            test_fn = &test_fill_image_set_2D;
+            break;
+        case k1DArray:
+            name = "1D Image Array Fill";
+            imageType = CL_MEM_OBJECT_IMAGE1D_ARRAY;
+            test_fn = &test_fill_image_set_1D_array;
+            break;
+        case k2DArray:
+            name = "2D Image Array Fill";
+            imageType = CL_MEM_OBJECT_IMAGE2D_ARRAY;
+            test_fn = &test_fill_image_set_2D_array;
+            break;
+        case k3D:
+            name = "3D Image Fill";
+            imageType = CL_MEM_OBJECT_IMAGE3D;
+            test_fn = &test_fill_image_set_3D;
+            break;
+        case k1DBuffer:
+            name = "1D Image Buffer Fill";
+            imageType = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+            test_fn = &test_fill_image_set_1D_buffer;
+            break;
+        default: log_error("Unhandled method\n"); return -1;
     }
 
     log_info( "Running %s tests...\n", name );
@@ -74,10 +111,12 @@ int test_image_type( cl_device_id device, cl_context context, cl_command_queue q
 
     for (auto test : imageTestTypes)
     {
-        if (gTypesToTest & test.type)
+        if (ctx.typesToTest & test.type)
         {
             std::vector<bool> filterFlags(formatList.size(), false);
-            if (filter_formats(formatList, filterFlags, test.channelTypes) == 0)
+            if (filter_formats(formatList, filterFlags, test.channelTypes,
+                               ctx.channelTypeToUse, ctx.channelOrderToUse)
+                == 0)
             {
                 log_info("No formats supported for %s type\n", test.name);
             }
@@ -96,8 +135,8 @@ int test_image_type( cl_device_id device, cl_context context, cl_command_queue q
                     gTestCount++;
 
                     int test_return =
-                        test_fn(device, context, queue, &formatList[i],
-                                test.explicitType);
+                        test_fn(device, context, queue, &formatList[i], flags,
+                                test.explicitType, ctx);
                     if (test_return)
                     {
                         gFailCount++;
@@ -116,11 +155,17 @@ int test_image_type( cl_device_id device, cl_context context, cl_command_queue q
 }
 
 
-int test_image_set( cl_device_id device, cl_context context, cl_command_queue queue, MethodsToTest testMethod )
+int test_image_set(cl_device_id device, cl_context context,
+                   cl_command_queue queue, MethodsToTest testMethod,
+                   const image_test_context_t &ctx)
 {
     int ret = 0;
-
-    ret += test_image_type( device, context, queue, testMethod, CL_MEM_READ_ONLY );
+    cl_mem_flags flags = CL_MEM_READ_ONLY;
+    if (ctx.enablePitch && testMethod != k1DBuffer)
+    {
+        flags |= CL_MEM_USE_HOST_PTR;
+    }
+    ret += test_image_type(device, context, queue, testMethod, flags, ctx);
 
     return ret;
 }

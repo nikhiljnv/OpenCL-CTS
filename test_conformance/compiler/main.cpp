@@ -13,99 +13,111 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "harness/compat.h"
+#include <string>
+#include <filesystem>
 
 #include "harness/testHarness.h"
-#include "procs.h"
-#include <stdio.h>
-#include <string.h>
+#include "harness/stringHelpers.h"
+#include "harness/os_helpers.h"
+#include "harness/parseParameters.h"
 
-#if !defined(_WIN32)
-#include <unistd.h>
-#endif
+std::string spvBinariesPath = "spirv_bin";
+std::string spvIncludeTestDirectory = "includeTestDirectory";
+std::string spvSecondIncludeTestDirectory = "secondIncludeTestDirectory";
 
-test_definition test_list[] = {
-    ADD_TEST(load_program_source),
-    ADD_TEST(load_multistring_source),
-    ADD_TEST(load_two_kernel_source),
-    ADD_TEST(load_null_terminated_source),
-    ADD_TEST(load_null_terminated_multi_line_source),
-    ADD_TEST(load_null_terminated_partial_multi_line_source),
-    ADD_TEST(load_discreet_length_source),
-    ADD_TEST(get_program_source),
-    ADD_TEST(get_program_build_info),
-    ADD_TEST(get_program_info),
+const std::string spvBinariesPathArg = "--spirv-binaries-path";
+const std::string spvIncludeTestDirectoryArg = "--include-test-directory";
+const std::string spvSecondIncludeTestDirectoryArg =
+    "--second-include-test-directory";
 
-    ADD_TEST(large_compile),
-    ADD_TEST(async_build),
+static test_status parseArgs(int &argc, const char *argv[],
+                             std::vector<std::string> &removed_args,
+                             std::string &help)
+{
+    help = "        " + spvBinariesPathArg
+        + " <path> - Set path to read SPIR-V files from (default: "
+        + spvBinariesPath + ")\n" + "        " + spvIncludeTestDirectoryArg
+        + " <path> - Set include test directory\n" + "        "
+        + spvSecondIncludeTestDirectoryArg
+        + " <path> - Set second include test directory\n";
 
-    ADD_TEST(options_build_optimizations),
-    ADD_TEST(options_build_macro),
-    ADD_TEST(options_build_macro_existence),
-    ADD_TEST(options_include_directory),
-    ADD_TEST(options_denorm_cache),
+    bool modifiedSpvBinariesPath = false;
+    std::vector<const char *> argList;
+    argList.push_back(argv[0]);
 
-    ADD_TEST(preprocessor_define_udef),
-    ADD_TEST(preprocessor_include),
-    ADD_TEST(preprocessor_line_error),
-    ADD_TEST(preprocessor_pragma),
+    for (int i = 1; i < argc; ++i)
+    {
+        if (argv[i] == spvBinariesPathArg)
+        {
+            if (i + 1 >= argc || argv[i + 1] == NULL)
+            {
+                log_error("Missing value for '%s' argument.\n",
+                          spvBinariesPathArg.c_str());
+                return TEST_FAIL;
+            }
+            spvBinariesPath = std::string(argv[i + 1]);
+            removed_args.push_back(std::string(argv[i]) + " " + argv[i + 1]);
+            modifiedSpvBinariesPath = true;
+            ++i; // skip the value
+        }
+        else if (argv[i] == spvIncludeTestDirectoryArg)
+        {
+            if (i + 1 >= argc || argv[i + 1] == NULL)
+            {
+                log_error("Missing value for '%s' argument.\n",
+                          spvIncludeTestDirectoryArg.c_str());
+                return TEST_FAIL;
+            }
+            spvIncludeTestDirectory = std::string(argv[i + 1]);
+            removed_args.push_back(std::string(argv[i]) + " " + argv[i + 1]);
+            ++i;
+        }
+        else if (argv[i] == spvSecondIncludeTestDirectoryArg)
+        {
+            if (i + 1 >= argc || argv[i + 1] == NULL)
+            {
+                log_error("Missing value for '%s' argument.\n",
+                          spvSecondIncludeTestDirectoryArg.c_str());
+                return TEST_FAIL;
+            }
+            spvSecondIncludeTestDirectory = std::string(argv[i + 1]);
+            removed_args.push_back(std::string(argv[i]) + " " + argv[i + 1]);
+            ++i;
+        }
+        else
+        {
+            argList.push_back(argv[i]);
+        }
+    }
 
-    ADD_TEST(opencl_c_versions),
-    ADD_TEST(compiler_defines_for_extensions),
-    ADD_TEST(image_macro),
+    if (!modifiedSpvBinariesPath && !gListTests)
+    {
+        log_info("Reading SPIR-V files from default '%s' path.\n",
+                 spvBinariesPath.c_str());
+        log_info("In case you want to set other directory use '%s' argument.\n",
+                 spvBinariesPathArg.c_str());
+    }
 
-    ADD_TEST(simple_compile_only),
-    ADD_TEST(simple_static_compile_only),
-    ADD_TEST(simple_extern_compile_only),
-    ADD_TEST(simple_compile_with_callback),
-    ADD_TEST(simple_embedded_header_compile),
-    ADD_TEST(simple_link_only),
-    ADD_TEST(two_file_regular_variable_access),
-    ADD_TEST(two_file_regular_struct_access),
-    ADD_TEST(two_file_regular_function_access),
-    ADD_TEST(simple_link_with_callback),
-    ADD_TEST(simple_embedded_header_link),
-    ADD_TEST(execute_after_simple_compile_and_link),
-    ADD_TEST(execute_after_simple_compile_and_link_no_device_info),
-    ADD_TEST(execute_after_simple_compile_and_link_with_defines),
-    ADD_TEST(execute_after_simple_compile_and_link_with_callbacks),
-    ADD_TEST(execute_after_simple_library_with_link),
-    ADD_TEST(execute_after_two_file_link),
-    ADD_TEST(execute_after_embedded_header_link),
-    ADD_TEST(execute_after_included_header_link),
-    ADD_TEST(execute_after_serialize_reload_object),
-    ADD_TEST(execute_after_serialize_reload_library),
-    ADD_TEST(simple_library_only),
-    ADD_TEST(simple_library_with_callback),
-    ADD_TEST(simple_library_with_link),
-    ADD_TEST(two_file_link),
-    ADD_TEST(multi_file_libraries),
-    ADD_TEST(multiple_files),
-    ADD_TEST(multiple_libraries),
-    ADD_TEST(multiple_files_multiple_libraries),
-    ADD_TEST(multiple_embedded_headers),
-
-    ADD_TEST(program_binary_type),
-    ADD_TEST(compile_and_link_status_options_log),
-
-    ADD_TEST_VERSION(pragma_unroll, Version(2, 0)),
-
-    ADD_TEST_VERSION(features_macro, Version(3, 0)),
-    ADD_TEST(unload_valid),
-    // ADD_TEST(unload_invalid), // disabling temporarily, see GitHub #977
-    ADD_TEST(unload_repeated),
-    ADD_TEST(unload_compile_unload_link),
-    ADD_TEST(unload_build_unload_create_kernel),
-    ADD_TEST(unload_link_different),
-    ADD_TEST(unload_build_threaded),
-    ADD_TEST(unload_build_info),
-    ADD_TEST(unload_program_binaries),
-
-};
-
-const int test_num = ARRAY_SIZE(test_list);
+    update_argc_argv_from_args_list(argList, argc, argv);
+    return TEST_PASS;
+}
 
 int main(int argc, const char *argv[])
 {
-    return runTestHarness(argc, argv, test_num, test_list, false, 0);
+    char const *sep = get_dir_sep();
+    char const *exe_dir = get_exe_dir();
+
+    // Set default include directories
+    spvIncludeTestDirectory =
+        std::string(exe_dir) + sep + "includeTestDirectory";
+    spvSecondIncludeTestDirectory =
+        std::string(exe_dir) + sep + "secondIncludeTestDirectory";
+
+    free((void *)sep);
+    free((void *)exe_dir);
+
+    return runTestHarnessWithCheckAndParse(
+        argc, argv, test_registry::getInstance().num_tests(),
+        test_registry::getInstance().definitions(), false, 0, nullptr,
+        parseArgs);
 }

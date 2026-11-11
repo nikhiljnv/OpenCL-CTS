@@ -14,18 +14,141 @@
 // limitations under the License.
 //
 #include "conversions.h"
+#include <cinttypes>
 #include <limits.h>
 #include <time.h>
 #include <assert.h>
 #include "mt19937.h"
 #include "compat.h"
 
-#if defined(__SSE__) || defined(_MSC_VER)
+#include <CL/cl_half.h>
+
+#if defined(__SSE__) || _M_IX86_FP == 1
 #include <xmmintrin.h>
 #endif
-#if defined(__SSE2__) || defined(_MSC_VER)
+#if defined(__SSE2__) || _M_IX86_FP == 2 || defined(_M_X64)
 #include <emmintrin.h>
 #endif
+
+// clang-format off
+const std::vector<float> specialValuesFloat = {
+    -NAN, -INFINITY, -FLT_MAX,
+    MAKE_HEX_FLOAT(-0x1.000002p64f, -0x1000002L, 40), MAKE_HEX_FLOAT(-0x1.0p64f, -0x1L, 64), MAKE_HEX_FLOAT(-0x1.fffffep63f, -0x1fffffeL, 39),
+    MAKE_HEX_FLOAT(-0x1.000002p63f, -0x1000002L, 39), MAKE_HEX_FLOAT(-0x1.0p63f, -0x1L, 63), MAKE_HEX_FLOAT(-0x1.fffffep62f, -0x1fffffeL, 38),
+    MAKE_HEX_FLOAT(-0x1.000002p32f, -0x1000002L, 8), MAKE_HEX_FLOAT(-0x1.0p32f, -0x1L, 32), MAKE_HEX_FLOAT(-0x1.fffffep31f, -0x1fffffeL, 7),
+    MAKE_HEX_FLOAT(-0x1.000002p31f, -0x1000002L, 7), MAKE_HEX_FLOAT(-0x1.0p31f, -0x1L, 31), MAKE_HEX_FLOAT(-0x1.fffffep30f, -0x1fffffeL, 6),
+    -1000.f, -100.f, -4.0f, -3.5f, -3.0f,
+    MAKE_HEX_FLOAT(-0x1.800002p1f, -0x1800002L, -23), -2.5f,
+    MAKE_HEX_FLOAT(-0x1.7ffffep1f, -0x17ffffeL, -23), -2.0f,
+    MAKE_HEX_FLOAT(-0x1.800002p0f, -0x1800002L, -24), -1.5f,
+    MAKE_HEX_FLOAT(-0x1.7ffffep0f, -0x17ffffeL, -24), MAKE_HEX_FLOAT(-0x1.000002p0f, -0x1000002L, -24), -1.0f,
+    MAKE_HEX_FLOAT(-0x1.fffffep-1f, -0x1fffffeL, -25), MAKE_HEX_FLOAT(-0x1.000002p-1f, -0x1000002L, -25), -0.5f,
+    MAKE_HEX_FLOAT(-0x1.fffffep-2f, -0x1fffffeL, -26), MAKE_HEX_FLOAT(-0x1.000002p-2f, -0x1000002L, -26), -0.25f,
+    MAKE_HEX_FLOAT(-0x1.fffffep-3f, -0x1fffffeL, -27), MAKE_HEX_FLOAT(-0x1.000002p-126f, -0x1000002L, -150), -FLT_MIN,
+    MAKE_HEX_FLOAT(-0x0.fffffep-126f, -0x0fffffeL, -150),
+    MAKE_HEX_FLOAT(-0x0.000ffep-126f, -0x0000ffeL, -150), MAKE_HEX_FLOAT(-0x0.0000fep-126f, -0x00000feL, -150),
+    MAKE_HEX_FLOAT(-0x0.00000ep-126f, -0x000000eL, -150), MAKE_HEX_FLOAT(-0x0.00000cp-126f, -0x000000cL, -150),
+    MAKE_HEX_FLOAT(-0x0.00000ap-126f, -0x000000aL, -150), MAKE_HEX_FLOAT(-0x0.000008p-126f, -0x0000008L, -150),
+    MAKE_HEX_FLOAT(-0x0.000006p-126f, -0x0000006L, -150), MAKE_HEX_FLOAT(-0x0.000004p-126f, -0x0000004L, -150),
+    MAKE_HEX_FLOAT(-0x0.000002p-126f, -0x0000002L, -150), -0.0f, +NAN, +INFINITY, +FLT_MAX,
+    MAKE_HEX_FLOAT(+0x1.000002p64f, +0x1000002L, 40), MAKE_HEX_FLOAT(+0x1.0p64f, +0x1L, 64), MAKE_HEX_FLOAT(+0x1.fffffep63f, +0x1fffffeL, 39),
+    MAKE_HEX_FLOAT(+0x1.000002p63f, +0x1000002L, 39), MAKE_HEX_FLOAT(+0x1.0p63f, +0x1L, 63), MAKE_HEX_FLOAT(+0x1.fffffep62f, +0x1fffffeL, 38),
+    MAKE_HEX_FLOAT(+0x1.000002p32f, +0x1000002L, 8), MAKE_HEX_FLOAT(+0x1.0p32f, +0x1L, 32), MAKE_HEX_FLOAT(+0x1.fffffep31f, +0x1fffffeL, 7),
+    MAKE_HEX_FLOAT(+0x1.000002p31f, +0x1000002L, 7), MAKE_HEX_FLOAT(+0x1.0p31f, +0x1L, 31), MAKE_HEX_FLOAT(+0x1.fffffep30f, +0x1fffffeL, 6),
+    +1000.f, +100.f, +4.0f, +3.5f, +3.0f,
+    MAKE_HEX_FLOAT(+0x1.800002p1f, +0x1800002L, -23), 2.5f, MAKE_HEX_FLOAT(+0x1.7ffffep1f, +0x17ffffeL, -23), +2.0f,
+    MAKE_HEX_FLOAT(+0x1.800002p0f, +0x1800002L, -24), 1.5f, MAKE_HEX_FLOAT(+0x1.7ffffep0f, +0x17ffffeL, -24),
+    MAKE_HEX_FLOAT(+0x1.000002p0f, +0x1000002L, -24), +1.0f, MAKE_HEX_FLOAT(+0x1.fffffep-1f, +0x1fffffeL, -25),
+    MAKE_HEX_FLOAT(+0x1.000002p-1f, +0x1000002L, -25), +0.5f, MAKE_HEX_FLOAT(+0x1.fffffep-2f, +0x1fffffeL, -26),
+    MAKE_HEX_FLOAT(+0x1.000002p-2f, +0x1000002L, -26), +0.25f, MAKE_HEX_FLOAT(+0x1.fffffep-3f, +0x1fffffeL, -27),
+    MAKE_HEX_FLOAT(0x1.000002p-126f, 0x1000002L, -150), +FLT_MIN, MAKE_HEX_FLOAT(+0x0.fffffep-126f, +0x0fffffeL, -150),
+    MAKE_HEX_FLOAT(+0x0.000ffep-126f, +0x0000ffeL, -150), MAKE_HEX_FLOAT(+0x0.0000fep-126f, +0x00000feL, -150),
+    MAKE_HEX_FLOAT(+0x0.00000ep-126f, +0x000000eL, -150), MAKE_HEX_FLOAT(+0x0.00000cp-126f, +0x000000cL, -150),
+    MAKE_HEX_FLOAT(+0x0.00000ap-126f, +0x000000aL, -150), MAKE_HEX_FLOAT(+0x0.000008p-126f, +0x0000008L, -150),
+    MAKE_HEX_FLOAT(+0x0.000006p-126f, +0x0000006L, -150), MAKE_HEX_FLOAT(+0x0.000004p-126f, +0x0000004L, -150),
+    MAKE_HEX_FLOAT(+0x0.000002p-126f, +0x0000002L, -150), +0.0f
+};
+
+const std::vector<double> specialValuesDouble = {
+    -NAN, -INFINITY, -DBL_MAX,
+    MAKE_HEX_DOUBLE(-0x1.0000000000001p64, -0x10000000000001LL, 12), MAKE_HEX_DOUBLE(-0x1.0p64, -0x1LL, 64),
+    MAKE_HEX_DOUBLE(-0x1.fffffffffffffp63, -0x1fffffffffffffLL, 11), MAKE_HEX_DOUBLE(-0x1.80000000000001p64, -0x180000000000001LL, 8),
+    MAKE_HEX_DOUBLE(-0x1.8p64, -0x18LL, 60), MAKE_HEX_DOUBLE(-0x1.7ffffffffffffp64, -0x17ffffffffffffLL, 12),
+    MAKE_HEX_DOUBLE(-0x1.80000000000001p63, -0x180000000000001LL, 7), MAKE_HEX_DOUBLE(-0x1.8p63, -0x18LL, 59),
+    MAKE_HEX_DOUBLE(-0x1.7ffffffffffffp63, -0x17ffffffffffffLL, 11), MAKE_HEX_DOUBLE(-0x1.0000000000001p63, -0x10000000000001LL, 11),
+    MAKE_HEX_DOUBLE(-0x1.0p63, -0x1LL, 63), MAKE_HEX_DOUBLE(-0x1.fffffffffffffp62, -0x1fffffffffffffLL, 10),
+    MAKE_HEX_DOUBLE(-0x1.80000000000001p32, -0x180000000000001LL, -24), MAKE_HEX_DOUBLE(-0x1.8p32, -0x18LL, 28),
+    MAKE_HEX_DOUBLE(-0x1.7ffffffffffffp32, -0x17ffffffffffffLL, -20), MAKE_HEX_DOUBLE(-0x1.000002p32, -0x1000002LL, 8),
+    MAKE_HEX_DOUBLE(-0x1.0p32, -0x1LL, 32), MAKE_HEX_DOUBLE(-0x1.fffffffffffffp31, -0x1fffffffffffffLL, -21),
+    MAKE_HEX_DOUBLE(-0x1.80000000000001p31, -0x180000000000001LL, -25), MAKE_HEX_DOUBLE(-0x1.8p31, -0x18LL, 27),
+    MAKE_HEX_DOUBLE(-0x1.7ffffffffffffp31, -0x17ffffffffffffLL, -21), MAKE_HEX_DOUBLE(-0x1.0000000000001p31, -0x10000000000001LL, -21),
+    MAKE_HEX_DOUBLE(-0x1.0p31, -0x1LL, 31), MAKE_HEX_DOUBLE(-0x1.fffffffffffffp30, -0x1fffffffffffffLL, -22),
+    -1000., -100., -4.0, -3.5, -3.0,
+    MAKE_HEX_DOUBLE(-0x1.8000000000001p1, -0x18000000000001LL, -51), -2.5,
+    MAKE_HEX_DOUBLE(-0x1.7ffffffffffffp1, -0x17ffffffffffffLL, -51), -2.0,
+    MAKE_HEX_DOUBLE(-0x1.8000000000001p0, -0x18000000000001LL, -52), -1.5,
+    MAKE_HEX_DOUBLE(-0x1.7ffffffffffffp0, -0x17ffffffffffffLL, -52), MAKE_HEX_DOUBLE(-0x1.0000000000001p0, -0x10000000000001LL, -52), -1.0,
+    MAKE_HEX_DOUBLE(-0x1.fffffffffffffp-1, -0x1fffffffffffffLL, -53), MAKE_HEX_DOUBLE(-0x1.0000000000001p-1, -0x10000000000001LL, -53), -0.5,
+    MAKE_HEX_DOUBLE(-0x1.fffffffffffffp-2, -0x1fffffffffffffLL, -54), MAKE_HEX_DOUBLE(-0x1.0000000000001p-2, -0x10000000000001LL, -54), -0.25,
+    MAKE_HEX_DOUBLE(-0x1.fffffffffffffp-3, -0x1fffffffffffffLL, -55), MAKE_HEX_DOUBLE(-0x1.0000000000001p-1022, -0x10000000000001LL, -1074),
+    -DBL_MIN,
+    MAKE_HEX_DOUBLE(-0x0.fffffffffffffp-1022, -0x0fffffffffffffLL, -1074), MAKE_HEX_DOUBLE(-0x0.0000000000fffp-1022, -0x00000000000fffLL, -1074),
+    MAKE_HEX_DOUBLE(-0x0.00000000000fep-1022, -0x000000000000feLL, -1074), MAKE_HEX_DOUBLE(-0x0.000000000000ep-1022, -0x0000000000000eLL, -1074),
+    MAKE_HEX_DOUBLE(-0x0.000000000000cp-1022, -0x0000000000000cLL, -1074), MAKE_HEX_DOUBLE(-0x0.000000000000ap-1022, -0x0000000000000aLL, -1074),
+    MAKE_HEX_DOUBLE(-0x0.0000000000008p-1022, -0x00000000000008LL, -1074), MAKE_HEX_DOUBLE(-0x0.0000000000007p-1022, -0x00000000000007LL, -1074),
+    MAKE_HEX_DOUBLE(-0x0.0000000000006p-1022, -0x00000000000006LL, -1074), MAKE_HEX_DOUBLE(-0x0.0000000000005p-1022, -0x00000000000005LL, -1074),
+    MAKE_HEX_DOUBLE(-0x0.0000000000004p-1022, -0x00000000000004LL, -1074), MAKE_HEX_DOUBLE(-0x0.0000000000003p-1022, -0x00000000000003LL, -1074),
+    MAKE_HEX_DOUBLE(-0x0.0000000000002p-1022, -0x00000000000002LL, -1074), MAKE_HEX_DOUBLE(-0x0.0000000000001p-1022, -0x00000000000001LL, -1074),
+    -0.0, MAKE_HEX_DOUBLE(+0x1.fffffffffffffp63, +0x1fffffffffffffLL, 11),
+    MAKE_HEX_DOUBLE(0x1.80000000000001p63, 0x180000000000001LL, 7), MAKE_HEX_DOUBLE(0x1.8p63, 0x18LL, 59),
+    MAKE_HEX_DOUBLE(0x1.7ffffffffffffp63, 0x17ffffffffffffLL, 11), MAKE_HEX_DOUBLE(+0x1.0000000000001p63, +0x10000000000001LL, 11),
+    MAKE_HEX_DOUBLE(+0x1.0p63, +0x1LL, 63), MAKE_HEX_DOUBLE(+0x1.fffffffffffffp62, +0x1fffffffffffffLL, 10),
+    MAKE_HEX_DOUBLE(+0x1.80000000000001p32, +0x180000000000001LL, -24), MAKE_HEX_DOUBLE(+0x1.8p32, +0x18LL, 28),
+    MAKE_HEX_DOUBLE(+0x1.7ffffffffffffp32, +0x17ffffffffffffLL, -20), MAKE_HEX_DOUBLE(+0x1.000002p32, +0x1000002LL, 8),
+    MAKE_HEX_DOUBLE(+0x1.0p32, +0x1LL, 32), MAKE_HEX_DOUBLE(+0x1.fffffffffffffp31, +0x1fffffffffffffLL, -21),
+    MAKE_HEX_DOUBLE(+0x1.80000000000001p31, +0x180000000000001LL, -25), MAKE_HEX_DOUBLE(+0x1.8p31, +0x18LL, 27),
+    MAKE_HEX_DOUBLE(+0x1.7ffffffffffffp31, +0x17ffffffffffffLL, -21), MAKE_HEX_DOUBLE(+0x1.0000000000001p31, +0x10000000000001LL, -21),
+    MAKE_HEX_DOUBLE(+0x1.0p31, +0x1LL, 31), MAKE_HEX_DOUBLE(+0x1.fffffffffffffp30, +0x1fffffffffffffLL, -22),
+    +1000., +100., +4.0, +3.5, +3.0, MAKE_HEX_DOUBLE(+0x1.8000000000001p1, +0x18000000000001LL, -51), +2.5,
+    MAKE_HEX_DOUBLE(+0x1.7ffffffffffffp1, +0x17ffffffffffffLL, -51), +2.0, MAKE_HEX_DOUBLE(+0x1.8000000000001p0, +0x18000000000001LL, -52),
+    +1.5, MAKE_HEX_DOUBLE(+0x1.7ffffffffffffp0, +0x17ffffffffffffLL, -52), MAKE_HEX_DOUBLE(-0x1.0000000000001p0, -0x10000000000001LL, -52),
+    +1.0, MAKE_HEX_DOUBLE(+0x1.fffffffffffffp-1, +0x1fffffffffffffLL, -53), MAKE_HEX_DOUBLE(+0x1.0000000000001p-1, +0x10000000000001LL, -53),
+    +0.5, MAKE_HEX_DOUBLE(+0x1.fffffffffffffp-2, +0x1fffffffffffffLL, -54), MAKE_HEX_DOUBLE(+0x1.0000000000001p-2, +0x10000000000001LL, -54),
+    +0.25, MAKE_HEX_DOUBLE(+0x1.fffffffffffffp-3, +0x1fffffffffffffLL, -55), MAKE_HEX_DOUBLE(+0x1.0000000000001p-1022, +0x10000000000001LL, -1074),
+    +DBL_MIN, MAKE_HEX_DOUBLE(+0x0.fffffffffffffp-1022, +0x0fffffffffffffLL, -1074),
+    MAKE_HEX_DOUBLE(+0x0.0000000000fffp-1022, +0x00000000000fffLL, -1074), MAKE_HEX_DOUBLE(+0x0.00000000000fep-1022, +0x000000000000feLL, -1074),
+    MAKE_HEX_DOUBLE(+0x0.000000000000ep-1022, +0x0000000000000eLL, -1074), MAKE_HEX_DOUBLE(+0x0.000000000000cp-1022, +0x0000000000000cLL, -1074),
+    MAKE_HEX_DOUBLE(+0x0.000000000000ap-1022, +0x0000000000000aLL, -1074), MAKE_HEX_DOUBLE(+0x0.0000000000008p-1022, +0x00000000000008LL, -1074),
+    MAKE_HEX_DOUBLE(+0x0.0000000000007p-1022, +0x00000000000007LL, -1074), MAKE_HEX_DOUBLE(+0x0.0000000000006p-1022, +0x00000000000006LL, -1074),
+    MAKE_HEX_DOUBLE(+0x0.0000000000005p-1022, +0x00000000000005LL, -1074), MAKE_HEX_DOUBLE(+0x0.0000000000004p-1022, +0x00000000000004LL, -1074),
+    MAKE_HEX_DOUBLE(+0x0.0000000000003p-1022, +0x00000000000003LL, -1074), MAKE_HEX_DOUBLE(+0x0.0000000000002p-1022, +0x00000000000002LL, -1074),
+    MAKE_HEX_DOUBLE(+0x0.0000000000001p-1022, +0x00000000000001LL, -1074), +0.0, MAKE_HEX_DOUBLE(-0x1.ffffffffffffep62, -0x1ffffffffffffeLL, 10),
+    MAKE_HEX_DOUBLE(-0x1.ffffffffffffcp62, -0x1ffffffffffffcLL, 10), MAKE_HEX_DOUBLE(-0x1.fffffffffffffp62, -0x1fffffffffffffLL, 10),
+    MAKE_HEX_DOUBLE(+0x1.ffffffffffffep62, +0x1ffffffffffffeLL, 10), MAKE_HEX_DOUBLE(+0x1.ffffffffffffcp62, +0x1ffffffffffffcLL, 10),
+    MAKE_HEX_DOUBLE(+0x1.fffffffffffffp62, +0x1fffffffffffffLL, 10), MAKE_HEX_DOUBLE(-0x1.ffffffffffffep51, -0x1ffffffffffffeLL, -1),
+    MAKE_HEX_DOUBLE(-0x1.ffffffffffffcp51, -0x1ffffffffffffcLL, -1), MAKE_HEX_DOUBLE(-0x1.fffffffffffffp51, -0x1fffffffffffffLL, -1),
+    MAKE_HEX_DOUBLE(+0x1.ffffffffffffep51, +0x1ffffffffffffeLL, -1), MAKE_HEX_DOUBLE(+0x1.ffffffffffffcp51, +0x1ffffffffffffcLL, -1),
+    MAKE_HEX_DOUBLE(+0x1.fffffffffffffp51, +0x1fffffffffffffLL, -1), MAKE_HEX_DOUBLE(-0x1.ffffffffffffep52, -0x1ffffffffffffeLL, 0),
+    MAKE_HEX_DOUBLE(-0x1.ffffffffffffcp52, -0x1ffffffffffffcLL, 0), MAKE_HEX_DOUBLE(-0x1.fffffffffffffp52, -0x1fffffffffffffLL, 0),
+    MAKE_HEX_DOUBLE(+0x1.ffffffffffffep52, +0x1ffffffffffffeLL, 0), MAKE_HEX_DOUBLE(+0x1.ffffffffffffcp52, +0x1ffffffffffffcLL, 0),
+    MAKE_HEX_DOUBLE(+0x1.fffffffffffffp52, +0x1fffffffffffffLL, 0), MAKE_HEX_DOUBLE(-0x1.ffffffffffffep53, -0x1ffffffffffffeLL, 1),
+    MAKE_HEX_DOUBLE(-0x1.ffffffffffffcp53, -0x1ffffffffffffcLL, 1), MAKE_HEX_DOUBLE(-0x1.fffffffffffffp53, -0x1fffffffffffffLL, 1),
+    MAKE_HEX_DOUBLE(+0x1.ffffffffffffep53, +0x1ffffffffffffeLL, 1), MAKE_HEX_DOUBLE(+0x1.ffffffffffffcp53, +0x1ffffffffffffcLL, 1),
+    MAKE_HEX_DOUBLE(+0x1.fffffffffffffp53, +0x1fffffffffffffLL, 1), MAKE_HEX_DOUBLE(-0x1.0000000000002p52, -0x10000000000002LL, 0),
+    MAKE_HEX_DOUBLE(-0x1.0000000000001p52, -0x10000000000001LL, 0), MAKE_HEX_DOUBLE(-0x1.0p52, -0x1LL, 52),
+    MAKE_HEX_DOUBLE(+0x1.0000000000002p52, +0x10000000000002LL, 0), MAKE_HEX_DOUBLE(+0x1.0000000000001p52, +0x10000000000001LL, 0),
+    MAKE_HEX_DOUBLE(+0x1.0p52, +0x1LL, 52), MAKE_HEX_DOUBLE(-0x1.0000000000002p53, -0x10000000000002LL, 1),
+    MAKE_HEX_DOUBLE(-0x1.0000000000001p53, -0x10000000000001LL, 1), MAKE_HEX_DOUBLE(-0x1.0p53, -0x1LL, 53),
+    MAKE_HEX_DOUBLE(+0x1.0000000000002p53, +0x10000000000002LL, 1), MAKE_HEX_DOUBLE(+0x1.0000000000001p53, +0x10000000000001LL, 1),
+    MAKE_HEX_DOUBLE(+0x1.0p53, +0x1LL, 53), MAKE_HEX_DOUBLE(-0x1.0000000000002p54, -0x10000000000002LL, 2),
+    MAKE_HEX_DOUBLE(-0x1.0000000000001p54, -0x10000000000001LL, 2), MAKE_HEX_DOUBLE(-0x1.0p54, -0x1LL, 54),
+    MAKE_HEX_DOUBLE(+0x1.0000000000002p54, +0x10000000000002LL, 2), MAKE_HEX_DOUBLE(+0x1.0000000000001p54, +0x10000000000001LL, 2),
+    MAKE_HEX_DOUBLE(+0x1.0p54, +0x1LL, 54), MAKE_HEX_DOUBLE(-0x1.fffffffefffffp62, -0x1fffffffefffffLL, 10),
+    MAKE_HEX_DOUBLE(-0x1.ffffffffp62, -0x1ffffffffLL, 30), MAKE_HEX_DOUBLE(-0x1.ffffffff00001p62, -0x1ffffffff00001LL, 10),
+    MAKE_HEX_DOUBLE(0x1.fffffffefffffp62, 0x1fffffffefffffLL, 10), MAKE_HEX_DOUBLE(0x1.ffffffffp62, 0x1ffffffffLL, 30),
+    MAKE_HEX_DOUBLE(0x1.ffffffff00001p62, 0x1ffffffff00001LL, 10),
+};
+// clang-format on
 
 void print_type_to_string(ExplicitType type, void *data, char *string)
 {
@@ -50,10 +173,10 @@ void print_type_to_string(ExplicitType type, void *data, char *string)
         case kInt: sprintf(string, "%d", *((cl_int *)data)); return;
         case kUInt:
         case kUnsignedInt: sprintf(string, "%u", *((cl_uint *)data)); return;
-        case kLong: sprintf(string, "%lld", *((cl_long *)data)); return;
+        case kLong: sprintf(string, "%" PRId64 "", *((cl_long *)data)); return;
         case kULong:
         case kUnsignedLong:
-            sprintf(string, "%llu", *((cl_ulong *)data));
+            sprintf(string, "%" PRIu64 "", *((cl_ulong *)data));
             return;
         case kFloat: sprintf(string, "%f", *((cl_float *)data)); return;
         case kHalf: sprintf(string, "half"); return;
@@ -107,7 +230,7 @@ static long lrintf_clamped(float f)
         volatile float x = f;
         float magicVal = magic[f < 0];
 
-#if defined(__SSE__) || defined(_WIN32)
+#if defined(__SSE__) || _M_IX86_FP == 1
         // Defeat x87 based arithmetic, which cant do FTZ, and will round this
         // incorrectly
         __m128 v = _mm_set_ss(x);
@@ -147,7 +270,7 @@ static long lrint_clamped(double f)
     {
         volatile double x = f;
         double magicVal = magic[f < 0];
-#if defined(__SSE2__) || (defined(_MSC_VER))
+#if defined(__SSE2__) || _M_IX86_FP == 2 || defined(_M_X64)
         // Defeat x87 based arithmetic, which cant do FTZ, and will round this
         // incorrectly
         __m128d v = _mm_set_sd(x);
@@ -260,6 +383,12 @@ static Long sLowerLimits[kNumExplicitTypes] = {
         }                                                                      \
         break;
 
+#define TO_HALF_CASE(inType, halfRoundingMode)                                 \
+    case kHalf:                                                                \
+        halfPtr = (cl_half *)outRaw;                                           \
+        *halfPtr =                                                             \
+            cl_half_from_float((float)(*inType##Ptr), halfRoundingMode);       \
+        break;
 #define TO_FLOAT_CASE(inType)                                                  \
     case kFloat:                                                               \
         floatPtr = (float *)outRaw;                                            \
@@ -279,6 +408,59 @@ static Long sLowerLimits[kNumExplicitTypes] = {
         outType##Ptr = (outType *)outRaw;                                      \
         *outType##Ptr = (outType)lrintf_clamped(*floatPtr);                    \
         break;
+
+#define HALF_ROUND_CASE(outEnum, outType, rounding, sat)                       \
+    case outEnum: {                                                            \
+        outType##Ptr = (outType *)outRaw;                                      \
+        /* Get the tens digit */                                               \
+        float fltEq = (Long)cl_half_to_float(*halfPtr);                        \
+        Long wholeValue = (Long)fltEq;                                         \
+        float largeRemainder = (fltEq - (float)wholeValue) * 10.f;             \
+        /* What do we do based on that? */                                     \
+        if (rounding == kRoundToEven)                                          \
+        {                                                                      \
+            if (wholeValue & 1LL) /*between 1 and 1.99 */                      \
+                wholeValue += 1LL; /* round up to even */                      \
+        }                                                                      \
+        else if (rounding == kRoundToZero)                                     \
+        {                                                                      \
+            /* Nothing to do, round-to-zero is what C casting does */          \
+        }                                                                      \
+        else if (rounding == kRoundToPosInf)                                   \
+        {                                                                      \
+            /* Only positive numbers are wrong */                              \
+            if (largeRemainder != 0.f && wholeValue >= 0) wholeValue++;        \
+        }                                                                      \
+        else if (rounding == kRoundToNegInf)                                   \
+        {                                                                      \
+            /* Only negative numbers are off */                                \
+            if (largeRemainder != 0.f && wholeValue < 0) wholeValue--;         \
+        }                                                                      \
+        else                                                                   \
+        { /* Default is round-to-nearest */                                    \
+            wholeValue = (Long)lrintf_clamped(fltEq);                          \
+        }                                                                      \
+        /* Now apply saturation rules */                                       \
+        if (sat)                                                               \
+        {                                                                      \
+            if ((sLowerLimits[outEnum] < 0                                     \
+                 && wholeValue > (Long)sUpperLimits[outEnum])                  \
+                || (sLowerLimits[outEnum] == 0                                 \
+                    && (ULong)wholeValue > sUpperLimits[outEnum]))             \
+                *outType##Ptr = (outType)sUpperLimits[outEnum];                \
+            else if (wholeValue < sLowerLimits[outEnum])                       \
+                *outType##Ptr = (outType)sLowerLimits[outEnum];                \
+            else                                                               \
+                *outType##Ptr = (outType)wholeValue;                           \
+        }                                                                      \
+        else                                                                   \
+        {                                                                      \
+            *outType##Ptr = (outType)(                                         \
+                wholeValue                                                     \
+                & (0xffffffffffffffffLL >> (64 - (sizeof(outType) * 8))));     \
+        }                                                                      \
+    }                                                                          \
+    break;
 
 #define FLOAT_ROUND_CASE(outEnum, outType, rounding, sat)                      \
     case outEnum: {                                                            \
@@ -385,16 +567,18 @@ static Long sLowerLimits[kNumExplicitTypes] = {
     break;
 
 typedef unsigned char uchar;
+typedef signed char schar;
 typedef unsigned short ushort;
 typedef unsigned int uint;
 typedef unsigned long ulong;
 
 void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                             bool saturate, RoundingType roundType,
+                            cl_half_rounding_mode halfRoundingMode,
                             ExplicitType outType)
 {
     bool *boolPtr;
-    char *charPtr;
+    schar *scharPtr;
     uchar *ucharPtr;
     short *shortPtr;
     ushort *ushortPtr;
@@ -402,6 +586,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
     uint *uintPtr;
     Long *LongPtr;
     ULong *ULongPtr;
+    cl_half *halfPtr;
     float *floatPtr;
     double *doublePtr;
 
@@ -432,6 +617,11 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                            get_explicit_type_size(outType));
                     break;
 
+                case kHalf:
+                    halfPtr = (cl_half *)outRaw;
+                    *halfPtr =
+                        (*boolPtr) ? cl_half_from_float(-1.f, CL_HALF_RTE) : 0;
+                    break;
                 case kFloat:
                     floatPtr = (float *)outRaw;
                     *floatPtr = (*boolPtr) ? -1.f : 0.f;
@@ -448,29 +638,30 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
             break;
 
         case kChar:
-            charPtr = (char *)inRaw;
+            scharPtr = (schar *)inRaw;
             switch (outType)
             {
-                BOOL_CASE(char)
+                BOOL_CASE(schar)
 
                 case kChar:
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(char, kUChar, uchar, saturate)
-                    SIMPLE_CAST_CASE(char, kUnsignedChar, uchar)
-                    SIMPLE_CAST_CASE(char, kShort, short)
-                    SIMPLE_CAST_CASE(char, kUShort, ushort)
-                    SIMPLE_CAST_CASE(char, kUnsignedShort, ushort)
-                    SIMPLE_CAST_CASE(char, kInt, int)
-                    SIMPLE_CAST_CASE(char, kUInt, uint)
-                    SIMPLE_CAST_CASE(char, kUnsignedInt, uint)
-                    SIMPLE_CAST_CASE(char, kLong, Long)
-                    SIMPLE_CAST_CASE(char, kULong, ULong)
-                    SIMPLE_CAST_CASE(char, kUnsignedLong, ULong)
+                    DOWN_CAST_CASE(schar, kUChar, uchar, saturate)
+                    SIMPLE_CAST_CASE(schar, kUnsignedChar, uchar)
+                    SIMPLE_CAST_CASE(schar, kShort, short)
+                    SIMPLE_CAST_CASE(schar, kUShort, ushort)
+                    SIMPLE_CAST_CASE(schar, kUnsignedShort, ushort)
+                    SIMPLE_CAST_CASE(schar, kInt, int)
+                    SIMPLE_CAST_CASE(schar, kUInt, uint)
+                    SIMPLE_CAST_CASE(schar, kUnsignedInt, uint)
+                    SIMPLE_CAST_CASE(schar, kLong, Long)
+                    SIMPLE_CAST_CASE(schar, kULong, ULong)
+                    SIMPLE_CAST_CASE(schar, kUnsignedLong, ULong)
 
-                    TO_FLOAT_CASE(char)
-                    TO_DOUBLE_CASE(char)
+                    TO_HALF_CASE(schar, halfRoundingMode)
+                    TO_FLOAT_CASE(schar)
+                    TO_DOUBLE_CASE(schar)
 
                 default:
                     log_error("ERROR: Invalid type given to "
@@ -490,7 +681,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(uchar, kChar, char, saturate)
+                    DOWN_CAST_CASE(uchar, kChar, schar, saturate)
                     SIMPLE_CAST_CASE(uchar, kShort, short)
                     SIMPLE_CAST_CASE(uchar, kUShort, ushort)
                     SIMPLE_CAST_CASE(uchar, kUnsignedShort, ushort)
@@ -501,6 +692,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     SIMPLE_CAST_CASE(uchar, kULong, ULong)
                     SIMPLE_CAST_CASE(uchar, kUnsignedLong, ULong)
 
+                    TO_HALF_CASE(uchar, halfRoundingMode)
                     TO_FLOAT_CASE(uchar)
                     TO_DOUBLE_CASE(uchar)
 
@@ -522,7 +714,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(uchar, kChar, char, saturate)
+                    DOWN_CAST_CASE(uchar, kChar, schar, saturate)
                     SIMPLE_CAST_CASE(uchar, kShort, short)
                     SIMPLE_CAST_CASE(uchar, kUShort, ushort)
                     SIMPLE_CAST_CASE(uchar, kUnsignedShort, ushort)
@@ -533,6 +725,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     SIMPLE_CAST_CASE(uchar, kULong, ULong)
                     SIMPLE_CAST_CASE(uchar, kUnsignedLong, ULong)
 
+                    TO_HALF_CASE(uchar, halfRoundingMode)
                     TO_FLOAT_CASE(uchar)
                     TO_DOUBLE_CASE(uchar)
 
@@ -553,7 +746,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(short, kChar, char, saturate)
+                    DOWN_CAST_CASE(short, kChar, schar, saturate)
                     DOWN_CAST_CASE(short, kUChar, uchar, saturate)
                     DOWN_CAST_CASE(short, kUnsignedChar, uchar, saturate)
                     DOWN_CAST_CASE(short, kUShort, ushort, saturate)
@@ -565,6 +758,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     SIMPLE_CAST_CASE(short, kULong, ULong)
                     SIMPLE_CAST_CASE(short, kUnsignedLong, ULong)
 
+                    TO_HALF_CASE(short, halfRoundingMode)
                     TO_FLOAT_CASE(short)
                     TO_DOUBLE_CASE(short)
 
@@ -586,7 +780,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(ushort, kChar, char, saturate)
+                    DOWN_CAST_CASE(ushort, kChar, schar, saturate)
                     DOWN_CAST_CASE(ushort, kUChar, uchar, saturate)
                     DOWN_CAST_CASE(ushort, kUnsignedChar, uchar, saturate)
                     DOWN_CAST_CASE(ushort, kShort, short, saturate)
@@ -597,6 +791,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     SIMPLE_CAST_CASE(ushort, kULong, ULong)
                     SIMPLE_CAST_CASE(ushort, kUnsignedLong, ULong)
 
+                    TO_HALF_CASE(ushort, halfRoundingMode)
                     TO_FLOAT_CASE(ushort)
                     TO_DOUBLE_CASE(ushort)
 
@@ -618,7 +813,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(ushort, kChar, char, saturate)
+                    DOWN_CAST_CASE(ushort, kChar, schar, saturate)
                     DOWN_CAST_CASE(ushort, kUChar, uchar, saturate)
                     DOWN_CAST_CASE(ushort, kUnsignedChar, uchar, saturate)
                     DOWN_CAST_CASE(ushort, kShort, short, saturate)
@@ -629,6 +824,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     SIMPLE_CAST_CASE(ushort, kULong, ULong)
                     SIMPLE_CAST_CASE(ushort, kUnsignedLong, ULong)
 
+                    TO_HALF_CASE(ushort, halfRoundingMode)
                     TO_FLOAT_CASE(ushort)
                     TO_DOUBLE_CASE(ushort)
 
@@ -649,7 +845,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(int, kChar, char, saturate)
+                    DOWN_CAST_CASE(int, kChar, schar, saturate)
                     DOWN_CAST_CASE(int, kUChar, uchar, saturate)
                     DOWN_CAST_CASE(int, kUnsignedChar, uchar, saturate)
                     DOWN_CAST_CASE(int, kShort, short, saturate)
@@ -661,6 +857,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     SIMPLE_CAST_CASE(int, kULong, ULong)
                     SIMPLE_CAST_CASE(int, kUnsignedLong, ULong)
 
+                    TO_HALF_CASE(int, halfRoundingMode)
                     TO_FLOAT_CASE(int)
                     TO_DOUBLE_CASE(int)
 
@@ -682,7 +879,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(uint, kChar, char, saturate)
+                    DOWN_CAST_CASE(uint, kChar, schar, saturate)
                     DOWN_CAST_CASE(uint, kUChar, uchar, saturate)
                     DOWN_CAST_CASE(uint, kUnsignedChar, uchar, saturate)
                     DOWN_CAST_CASE(uint, kShort, short, saturate)
@@ -693,6 +890,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     SIMPLE_CAST_CASE(uint, kULong, ULong)
                     SIMPLE_CAST_CASE(uint, kUnsignedLong, ULong)
 
+                    TO_HALF_CASE(uint, halfRoundingMode)
                     TO_FLOAT_CASE(uint)
                     TO_DOUBLE_CASE(uint)
 
@@ -714,7 +912,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(uint, kChar, char, saturate)
+                    DOWN_CAST_CASE(uint, kChar, schar, saturate)
                     DOWN_CAST_CASE(uint, kUChar, uchar, saturate)
                     DOWN_CAST_CASE(uint, kUnsignedChar, uchar, saturate)
                     DOWN_CAST_CASE(uint, kShort, short, saturate)
@@ -725,6 +923,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     SIMPLE_CAST_CASE(uint, kULong, ULong)
                     SIMPLE_CAST_CASE(uint, kUnsignedLong, ULong)
 
+                    TO_HALF_CASE(uint, halfRoundingMode)
                     TO_FLOAT_CASE(uint)
                     TO_DOUBLE_CASE(uint)
 
@@ -745,7 +944,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    DOWN_CAST_CASE(Long, kChar, char, saturate)
+                    DOWN_CAST_CASE(Long, kChar, schar, saturate)
                     DOWN_CAST_CASE(Long, kUChar, uchar, saturate)
                     DOWN_CAST_CASE(Long, kUnsignedChar, uchar, saturate)
                     DOWN_CAST_CASE(Long, kShort, short, saturate)
@@ -757,6 +956,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     DOWN_CAST_CASE(Long, kULong, ULong, saturate)
                     DOWN_CAST_CASE(Long, kUnsignedLong, ULong, saturate)
 
+                    TO_HALF_CASE(Long, halfRoundingMode)
                     TO_FLOAT_CASE(Long)
                     TO_DOUBLE_CASE(Long)
 
@@ -778,7 +978,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    U_DOWN_CAST_CASE(ULong, kChar, char, saturate)
+                    U_DOWN_CAST_CASE(ULong, kChar, schar, saturate)
                     U_DOWN_CAST_CASE(ULong, kUChar, uchar, saturate)
                     U_DOWN_CAST_CASE(ULong, kUnsignedChar, uchar, saturate)
                     U_DOWN_CAST_CASE(ULong, kShort, short, saturate)
@@ -789,6 +989,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     U_DOWN_CAST_CASE(ULong, kUnsignedInt, uint, saturate)
                     U_DOWN_CAST_CASE(ULong, kLong, Long, saturate)
 
+                    TO_HALF_CASE(ULong, halfRoundingMode)
                     TO_FLOAT_CASE(ULong)
                     TO_DOUBLE_CASE(ULong)
 
@@ -810,7 +1011,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
                     break;
 
-                    U_DOWN_CAST_CASE(ULong, kChar, char, saturate)
+                    U_DOWN_CAST_CASE(ULong, kChar, schar, saturate)
                     U_DOWN_CAST_CASE(ULong, kUChar, uchar, saturate)
                     U_DOWN_CAST_CASE(ULong, kUnsignedChar, uchar, saturate)
                     U_DOWN_CAST_CASE(ULong, kShort, short, saturate)
@@ -821,8 +1022,48 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                     U_DOWN_CAST_CASE(ULong, kUnsignedInt, uint, saturate)
                     U_DOWN_CAST_CASE(ULong, kLong, Long, saturate)
 
+                    TO_HALF_CASE(ULong, halfRoundingMode)
                     TO_FLOAT_CASE(ULong)
                     TO_DOUBLE_CASE(ULong)
+
+                default:
+                    log_error("ERROR: Invalid type given to "
+                              "convert_explicit_value!!\n");
+                    break;
+            }
+            break;
+
+        case kHalf:
+            halfPtr = (cl_half *)inRaw;
+            switch (outType)
+            {
+                BOOL_CASE(half)
+
+                HALF_ROUND_CASE(kChar, schar, roundType, saturate)
+                HALF_ROUND_CASE(kUChar, uchar, roundType, saturate)
+                HALF_ROUND_CASE(kUnsignedChar, uchar, roundType, saturate)
+                HALF_ROUND_CASE(kShort, short, roundType, saturate)
+                HALF_ROUND_CASE(kUShort, ushort, roundType, saturate)
+                HALF_ROUND_CASE(kUnsignedShort, ushort, roundType, saturate)
+                HALF_ROUND_CASE(kInt, int, roundType, saturate)
+                HALF_ROUND_CASE(kUInt, uint, roundType, saturate)
+                HALF_ROUND_CASE(kUnsignedInt, uint, roundType, saturate)
+                HALF_ROUND_CASE(kLong, Long, roundType, saturate)
+                HALF_ROUND_CASE(kULong, ULong, roundType, saturate)
+                HALF_ROUND_CASE(kUnsignedLong, ULong, roundType, saturate)
+
+                case kHalf:
+                    memcpy(outRaw, inRaw, get_explicit_type_size(inType));
+                    break;
+
+                case kFloat:
+                    floatPtr = (float *)outRaw;
+                    *floatPtr = cl_half_to_float(*halfPtr);
+                    break;
+                case kDouble:
+                    doublePtr = (double *)outRaw;
+                    *doublePtr = cl_half_to_float(*halfPtr);
+                    break;
 
                 default:
                     log_error("ERROR: Invalid type given to "
@@ -837,7 +1078,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
             {
                 BOOL_CASE(float)
 
-                FLOAT_ROUND_CASE(kChar, char, roundType, saturate)
+                FLOAT_ROUND_CASE(kChar, schar, roundType, saturate)
                 FLOAT_ROUND_CASE(kUChar, uchar, roundType, saturate)
                 FLOAT_ROUND_CASE(kUnsignedChar, uchar, roundType, saturate)
                 FLOAT_ROUND_CASE(kShort, short, roundType, saturate)
@@ -849,6 +1090,8 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                 FLOAT_ROUND_CASE(kLong, Long, roundType, saturate)
                 FLOAT_ROUND_CASE(kULong, ULong, roundType, saturate)
                 FLOAT_ROUND_CASE(kUnsignedLong, ULong, roundType, saturate)
+
+                TO_HALF_CASE(float, halfRoundingMode)
 
                 case kFloat:
                     memcpy(outRaw, inRaw, get_explicit_type_size(inType));
@@ -869,7 +1112,7 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
             {
                 BOOL_CASE(double)
 
-                DOUBLE_ROUND_CASE(kChar, char, roundType, saturate)
+                DOUBLE_ROUND_CASE(kChar, schar, roundType, saturate)
                 DOUBLE_ROUND_CASE(kUChar, uchar, roundType, saturate)
                 DOUBLE_ROUND_CASE(kUnsignedChar, uchar, roundType, saturate)
                 DOUBLE_ROUND_CASE(kShort, short, roundType, saturate)
@@ -881,6 +1124,8 @@ void convert_explicit_value(void *inRaw, void *outRaw, ExplicitType inType,
                 DOUBLE_ROUND_CASE(kLong, Long, roundType, saturate)
                 DOUBLE_ROUND_CASE(kULong, ULong, roundType, saturate)
                 DOUBLE_ROUND_CASE(kUnsignedLong, ULong, roundType, saturate)
+
+                TO_HALF_CASE(double, halfRoundingMode)
 
                 TO_FLOAT_CASE(double);
 
@@ -1193,6 +1438,39 @@ int random_in_range(int minV, int maxV, MTdata d)
 {
     cl_ulong r = ((cl_ulong)genrand_int32(d)) * (maxV - minV + 1);
     return (cl_uint)(r >> 32) + minV;
+}
+
+cl_ulong get_random_ulong(cl_ulong low, cl_ulong high, MTdata d)
+{
+    assert(low <= high && "Invalid random number range specified");
+
+    const cl_ulong width = high - low;
+    if (width == CL_ULONG_MAX) return genrand_int64(d);
+
+    const cl_ulong range = width + 1;
+
+    // Drop the incomplete trailing block of `range` values so that every
+    // result stays equally likely: the largest usable draw is
+    // CL_ULONG_MAX - (2^64 mod range), computed here without a 65-bit value.
+    const cl_ulong limit = CL_ULONG_MAX - (CL_ULONG_MAX % range + 1) % range;
+
+    cl_ulong r;
+    do
+    {
+        r = genrand_int64(d);
+    } while (r > limit);
+
+    return low + r % range;
+}
+
+cl_long get_random_long(cl_long low, cl_long high, MTdata d)
+{
+    assert(low <= high && "Invalid random number range specified");
+
+    // The width of the interval need not be representable as a cl_long, so
+    // offset the low bound in unsigned arithmetic and convert back.
+    const cl_ulong width = (cl_ulong)high - (cl_ulong)low;
+    return (cl_long)((cl_ulong)low + get_random_ulong(0, width, d));
 }
 
 size_t get_random_size_t(size_t low, size_t high, MTdata d)

@@ -1,9 +1,11 @@
 
 set(HARNESS_SOURCES
+    harness/alloc.cpp
     harness/typeWrappers.cpp
     harness/mt19937.cpp
     harness/conversions.cpp
     harness/rounding_mode.cpp
+    harness/mingw_compat.c
     harness/msvc9.c
     harness/crc32.cpp
     harness/errorHelpers.cpp

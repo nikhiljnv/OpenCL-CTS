@@ -23,7 +23,8 @@
 
 #include <CL/cl_half.h>
 
-static RoundingMode gFloatToHalfRoundingMode = kDefaultRoundingMode;
+[[maybe_unused]] static RoundingMode gFloatToHalfRoundingMode =
+    kDefaultRoundingMode;
 
 
 CResult::CResult(): _result(TEST_PASS), _resultLast(TEST_NORESULT) {}
@@ -224,7 +225,7 @@ bool YUVGenerate(TSurfaceFormat surfaceFormat, std::vector<cl_uchar> &yuv,
     return true;
 }
 
-bool YUVSurfaceSetNV12(std::auto_ptr<CSurfaceWrapper> &surface,
+bool YUVSurfaceSetNV12(std::unique_ptr<CSurfaceWrapper> &surface,
                        const std::vector<cl_uchar> &yuv, unsigned int width,
                        unsigned int height)
 {
@@ -257,7 +258,7 @@ bool YUVSurfaceSetNV12(std::auto_ptr<CSurfaceWrapper> &surface,
 #endif
 }
 
-bool YUVSurfaceSetYV12(std::auto_ptr<CSurfaceWrapper> &surface,
+bool YUVSurfaceSetYV12(std::unique_ptr<CSurfaceWrapper> &surface,
                        const std::vector<cl_uchar> &yuv, unsigned int width,
                        unsigned int height)
 {
@@ -305,7 +306,7 @@ bool YUVSurfaceSetYV12(std::auto_ptr<CSurfaceWrapper> &surface,
 }
 
 bool YUVSurfaceSet(TSurfaceFormat surfaceFormat,
-                   std::auto_ptr<CSurfaceWrapper> &surface,
+                   std::unique_ptr<CSurfaceWrapper> &surface,
                    const std::vector<cl_uchar> &yuv, unsigned int width,
                    unsigned int height)
 {
@@ -326,7 +327,7 @@ bool YUVSurfaceSet(TSurfaceFormat surfaceFormat,
     return true;
 }
 
-bool YUVSurfaceGetNV12(std::auto_ptr<CSurfaceWrapper> &surface,
+bool YUVSurfaceGetNV12(std::unique_ptr<CSurfaceWrapper> &surface,
                        std::vector<cl_uchar> &yuv, unsigned int width,
                        unsigned int height)
 {
@@ -363,7 +364,7 @@ bool YUVSurfaceGetNV12(std::auto_ptr<CSurfaceWrapper> &surface,
 #endif
 }
 
-bool YUVSurfaceGetYV12(std::auto_ptr<CSurfaceWrapper> &surface,
+bool YUVSurfaceGetYV12(std::unique_ptr<CSurfaceWrapper> &surface,
                        std::vector<cl_uchar> &yuv, unsigned int width,
                        unsigned int height)
 {
@@ -411,7 +412,7 @@ bool YUVSurfaceGetYV12(std::auto_ptr<CSurfaceWrapper> &surface,
 }
 
 bool YUVSurfaceGet(TSurfaceFormat surfaceFormat,
-                   std::auto_ptr<CSurfaceWrapper> &surface,
+                   std::unique_ptr<CSurfaceWrapper> &surface,
                    std::vector<cl_uchar> &yuv, unsigned int width,
                    unsigned int height)
 {
@@ -446,7 +447,7 @@ bool YUVCompareNV12(const std::vector<cl_uchar> &yuvTest,
             if (yuvTest[plane0Offset + x] != yuvRef[plane0Offset + x])
             {
                 log_error("Plane 0 (Y) is different than expected, reference "
-                          "value: %i, test value: %i, x: %i, y: %i\n",
+                          "value: %i, test value: %i, x: %zu, y: %zu\n",
                           yuvRef[plane0Offset + x], yuvTest[plane0Offset + x],
                           x, y);
                 return false;
@@ -465,7 +466,7 @@ bool YUVCompareNV12(const std::vector<cl_uchar> &yuvTest,
                 != yuvRef.at(plane12Offset + 2 * x))
             {
                 log_error("Plane 1 (U) is different than expected, reference "
-                          "value: %i, test value: %i, x: %i, y: %i\n",
+                          "value: %i, test value: %i, x: %zu, y: %zu\n",
                           yuvRef[plane12Offset + 2 * x],
                           yuvTest[plane12Offset + 2 * x], x, y);
                 return false;
@@ -475,7 +476,7 @@ bool YUVCompareNV12(const std::vector<cl_uchar> &yuvTest,
                 != yuvRef.at(plane12Offset + 2 * x + 1))
             {
                 log_error("Plane 2 (V) is different than expected, reference "
-                          "value: %i, test value: %i, x: %i, y: %i\n",
+                          "value: %i, test value: %i, x: %zu, y: %zu\n",
                           yuvRef[plane12Offset + 2 * x + 1],
                           yuvTest[plane12Offset + 2 * x + 1], x, y);
                 return false;
@@ -500,7 +501,7 @@ bool YUVCompareYV12(const std::vector<cl_uchar> &yuvTest,
             if (yuvTest.at(plane0Offset + x) != yuvRef.at(plane0Offset + x))
             {
                 log_error("Plane 0 (Y) is different than expected, reference "
-                          "value: %i, test value: %i, x: %i, y: %i\n",
+                          "value: %i, test value: %i, x: %zu, y: %zu\n",
                           yuvRef[plane0Offset + x], yuvTest[plane0Offset + x],
                           x, y);
                 return false;
@@ -518,7 +519,7 @@ bool YUVCompareYV12(const std::vector<cl_uchar> &yuvTest,
             if (yuvTest.at(plane1Offset + x) != yuvRef.at(plane1Offset + x))
             {
                 log_error("Plane 1 (V) is different than expected, reference "
-                          "value: %i, test value: %i, x: %i, y: %i\n",
+                          "value: %i, test value: %i, x: %zu, y: %zu\n",
                           yuvRef[plane1Offset + x], yuvTest[plane1Offset + x],
                           x, y);
                 return false;
@@ -536,7 +537,7 @@ bool YUVCompareYV12(const std::vector<cl_uchar> &yuvTest,
             if (yuvTest.at(plane2Offset + x) != yuvRef.at(plane2Offset + x))
             {
                 log_error("Plane 2 (U) is different than expected, reference "
-                          "value: %i, test value: %i, x: %i, y: %i\n",
+                          "value: %i, test value: %i, x: %zu, y: %zu\n",
                           yuvRef[plane2Offset + x], yuvTest[plane2Offset + x],
                           x, y);
                 return false;
@@ -968,7 +969,7 @@ bool GetImageInfo(cl_mem object, cl_image_format formatExp,
     if (elementSizeExp != elementSize)
     {
         log_error("Value of CL_IMAGE_ELEMENT_SIZE is different than expected "
-                  "(size: %i, exp size: %i)\n",
+                  "(size: %zu, exp size: %zu)\n",
                   elementSize, elementSizeExp);
         result = false;
     }
@@ -985,7 +986,7 @@ bool GetImageInfo(cl_mem object, cl_image_format formatExp,
         || (rowPitchExp > 0 && rowPitchExp > rowPitch))
     {
         log_error("Value of CL_IMAGE_ROW_PITCH is different than expected "
-                  "(size: %i, exp size: %i)\n",
+                  "(size: %zu, exp size: %zu)\n",
                   rowPitch, rowPitchExp);
         result = false;
     }
@@ -1003,7 +1004,7 @@ bool GetImageInfo(cl_mem object, cl_image_format formatExp,
         || (slicePitchExp > 0 && slicePitchExp > slicePitch))
     {
         log_error("Value of CL_IMAGE_SLICE_PITCH is different than expected "
-                  "(size: %i, exp size: %i)\n",
+                  "(size: %zu, exp size: %zu)\n",
                   slicePitch, slicePitchExp);
         result = false;
     }
@@ -1019,7 +1020,7 @@ bool GetImageInfo(cl_mem object, cl_image_format formatExp,
     if (widthExp != width)
     {
         log_error("Value of CL_IMAGE_WIDTH is different than expected (size: "
-                  "%i, exp size: %i)\n",
+                  "%zu, exp size: %zu)\n",
                   width, widthExp);
         result = false;
     }
@@ -1035,7 +1036,7 @@ bool GetImageInfo(cl_mem object, cl_image_format formatExp,
     if (heightExp != height)
     {
         log_error("Value of CL_IMAGE_HEIGHT is different than expected (size: "
-                  "%i, exp size: %i)\n",
+                  "%zu, exp size: %zu)\n",
                   height, heightExp);
         result = false;
     }
@@ -1051,7 +1052,7 @@ bool GetImageInfo(cl_mem object, cl_image_format formatExp,
     if (depthExp != depth)
     {
         log_error("Value of CL_IMAGE_DEPTH is different than expected (size: "
-                  "%i, exp size: %i)\n",
+                  "%zu, exp size: %zu)\n",
                   depth, depthExp);
         result = false;
     }
@@ -1078,7 +1079,7 @@ bool GetImageInfo(cl_mem object, cl_image_format formatExp,
 }
 
 bool GetMemObjInfo(cl_mem object, cl_dx9_media_adapter_type_khr adapterType,
-                   std::auto_ptr<CSurfaceWrapper> &surface,
+                   std::unique_ptr<CSurfaceWrapper> &surface,
                    void *shareHandleExp)
 {
     bool result = true;
@@ -1127,7 +1128,7 @@ bool GetMemObjInfo(cl_mem object, cl_dx9_media_adapter_type_khr adapterType,
             if (paramSize != sizeof(surfaceInfo))
             {
                 log_error("Invalid CL_MEM_DX9_MEDIA_SURFACE_INFO_KHR parameter "
-                          "size: %i, expected: %i\n",
+                          "size: %zu, expected: %zu\n",
                           paramSize, sizeof(surfaceInfo));
                 result = false;
             }
@@ -1154,7 +1155,7 @@ bool GetMemObjInfo(cl_mem object, cl_dx9_media_adapter_type_khr adapterType,
             if (paramSize != sizeof(mediaAdapterType))
             {
                 log_error("Invalid CL_MEM_DX9_MEDIA_ADAPTER_TYPE_KHR parameter "
-                          "size: %i, expected: %i\n",
+                          "size: %zu, expected: %zu\n",
                           paramSize, sizeof(mediaAdapterType));
                 result = false;
             }
@@ -1172,7 +1173,7 @@ bool GetMemObjInfo(cl_mem object, cl_dx9_media_adapter_type_khr adapterType,
 bool ImageInfoVerify(cl_dx9_media_adapter_type_khr adapterType,
                      const std::vector<cl_mem> &memObjList, unsigned int width,
                      unsigned int height,
-                     std::auto_ptr<CSurfaceWrapper> &surface,
+                     std::unique_ptr<CSurfaceWrapper> &surface,
                      void *sharedHandle)
 {
     if (memObjList.size() != 2 && memObjList.size() != 3)
@@ -1235,7 +1236,7 @@ bool ImageInfoVerify(cl_dx9_media_adapter_type_khr adapterType,
     {
         if (!GetMemObjInfo(memObjList[i], adapterType, surface, sharedHandle))
         {
-            log_error("clGetMemObjInfo(%i) failed\n", i);
+            log_error("clGetMemObjInfo(%zu) failed\n", i);
             return false;
         }
     }
@@ -1379,19 +1380,19 @@ D3DFORMAT SurfaceFormatToD3D(TSurfaceFormat surfaceFormat)
 #endif
 
 bool DeviceCreate(cl_dx9_media_adapter_type_khr adapterType,
-                  std::auto_ptr<CDeviceWrapper> &device)
+                  std::unique_ptr<CDeviceWrapper> &device)
 {
     switch (adapterType)
     {
 #if defined(_WIN32)
         case CL_ADAPTER_D3D9_KHR:
-            device = std::auto_ptr<CDeviceWrapper>(new CD3D9Wrapper());
+            device = std::unique_ptr<CDeviceWrapper>(new CD3D9Wrapper());
             break;
         case CL_ADAPTER_D3D9EX_KHR:
-            device = std::auto_ptr<CDeviceWrapper>(new CD3D9ExWrapper());
+            device = std::unique_ptr<CDeviceWrapper>(new CD3D9ExWrapper());
             break;
         case CL_ADAPTER_DXVA_KHR:
-            device = std::auto_ptr<CDeviceWrapper>(new CDXVAWrapper());
+            device = std::unique_ptr<CDeviceWrapper>(new CDXVAWrapper());
             break;
 #endif
         default:
@@ -1551,7 +1552,7 @@ void SurfaceFormatToString(TSurfaceFormat surfaceFormat, std::string &str)
 bool MediaSurfaceCreate(cl_dx9_media_adapter_type_khr adapterType,
                         unsigned int width, unsigned int height,
                         TSurfaceFormat surfaceFormat, CDeviceWrapper &device,
-                        std::auto_ptr<CSurfaceWrapper> &surface,
+                        std::unique_ptr<CSurfaceWrapper> &surface,
                         bool sharedHandle, void **objectSharedHandle)
 {
     switch (adapterType)
@@ -1559,7 +1560,7 @@ bool MediaSurfaceCreate(cl_dx9_media_adapter_type_khr adapterType,
 #if defined(_WIN32)
         case CL_ADAPTER_D3D9_KHR: {
             surface =
-                std::auto_ptr<CD3D9SurfaceWrapper>(new CD3D9SurfaceWrapper);
+                std::unique_ptr<CD3D9SurfaceWrapper>(new CD3D9SurfaceWrapper);
             CD3D9SurfaceWrapper *d3dSurface =
                 static_cast<CD3D9SurfaceWrapper *>(surface.get());
             HRESULT hr = 0;
@@ -1578,7 +1579,7 @@ bool MediaSurfaceCreate(cl_dx9_media_adapter_type_khr adapterType,
         break;
         case CL_ADAPTER_D3D9EX_KHR: {
             surface =
-                std::auto_ptr<CD3D9SurfaceWrapper>(new CD3D9SurfaceWrapper);
+                std::unique_ptr<CD3D9SurfaceWrapper>(new CD3D9SurfaceWrapper);
             CD3D9SurfaceWrapper *d3dSurface =
                 static_cast<CD3D9SurfaceWrapper *>(surface.get());
             HRESULT hr = 0;
@@ -1598,7 +1599,7 @@ bool MediaSurfaceCreate(cl_dx9_media_adapter_type_khr adapterType,
         break;
         case CL_ADAPTER_DXVA_KHR: {
             surface =
-                std::auto_ptr<CD3D9SurfaceWrapper>(new CD3D9SurfaceWrapper);
+                std::unique_ptr<CD3D9SurfaceWrapper>(new CD3D9SurfaceWrapper);
             CD3D9SurfaceWrapper *d3dSurface =
                 static_cast<CD3D9SurfaceWrapper *>(surface.get());
             HRESULT hr = 0;

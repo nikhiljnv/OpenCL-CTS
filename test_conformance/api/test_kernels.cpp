@@ -1,6 +1,6 @@
 //
 // Copyright (c) 2017 The Khronos Group Inc.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -16,6 +16,11 @@
 #include "testBase.h"
 #include "harness/typeWrappers.h"
 #include "harness/conversions.h"
+#include "harness/featureHelpers.h"
+#include "harness/stringHelpers.h"
+
+#include <array>
+#include <vector>
 
 const char *sample_single_test_kernel[] = {
 "__kernel void sample_test(__global float *src, __global int *dst)\n"
@@ -49,6 +54,17 @@ const char *sample_const_test_kernel[] = {
 "\n"
 "}\n" };
 
+const char *sample_image_test_kernel[] = {
+    "__kernel void sample_image_test(__read_only image2d_t src, __write_only "
+    "image2d_t dst)\n"
+    "{\n"
+    "    int2 coord = (int2)(get_global_id(0), get_global_id(1));\n"
+    "    uint4 value = read_imageui(src, coord);\n"
+    "    write_imageui(dst, coord, value);\n"
+    "\n"
+    "}\n"
+};
+
 const char *sample_const_global_test_kernel[] = {
 "__constant int addFactor = 1024;\n"
 "__kernel void sample_test(__global int *src1, __global int *dst)\n"
@@ -75,10 +91,86 @@ const char *sample_two_kernel_program[] = {
 "\n"
 "}\n" };
 
+const char *sample_arg_image_msaa_test_kernel = R"(
+    #pragma OPENCL EXTENSION cl_khr_gl_msaa_sharing : enable
+    __kernel void arg_image_test(%s src, __global float4 *dst)
+    {
+        int%s coord = (int%s)(get_global_id(0));
+        dst[0]=read_imagef(src, coord, 0);
+    }
+)";
 
+const char *sample_arg_image_test_kernel = R"(
+    const sampler_t samplerA = CLK_NORMALIZED_COORDS_FALSE |
+                               CLK_ADDRESS_REPEAT |
+                               CLK_FILTER_NEAREST;
+    __kernel void arg_image_test(%s src, __global float4 *dst)
+    {
+        int%s coord = (int%s)(get_global_id(0));
+        dst[0]=read_imagef(src, samplerA, coord);
+    }
+)";
 
+const char *sample_queue_test_kernel = R"(
+    __kernel void enqueue_call_func() {
+      }
+    __kernel void queue_test(queue_t queue)
+    {
+        ndrange_t ndrange = ndrange_1D(1);
+        enqueue_kernel(queue, CLK_ENQUEUE_FLAGS_WAIT_KERNEL, ndrange,
+                           ^{enqueue_call_func();});
+    }
+)";
 
-int test_get_kernel_info(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+const char *sample_sampler_size_test_kernel = R"(
+    __kernel void sampler_size_test(sampler_t sampler, __read_only image2d_t src, __global float4 *dst)
+    {
+        int  tid = get_global_id(0);
+        int2 coord = (int2)(get_global_id(0), get_global_id(1));
+        float4 data = read_imagef(src, sampler, coord);
+        dst[tid] = data;
+    }
+)";
+
+const char *sample_mem_obj_size_test_kernel = R"(
+    __kernel void mem_obj_size_test(__global int *src, __global int *dst)
+    {
+        size_t  tid = get_global_id(0);
+        dst[tid] = src[tid];
+    }
+)";
+
+const char *sample_local_size_test_kernel = R"(
+    __kernel void local_size_test(__local int *src, __global int *dst)
+    {
+        size_t  tid = get_global_id(0);
+        dst[tid] = src[tid];
+    }
+)";
+
+const char *sample_read_only_image_test_kernel = R"(
+    __kernel void read_only_image_test(__write_only image2d_t img, __global uint4 *src)
+    {
+        write_imageui(img, (int2)(get_global_id(0), get_global_id(1)), src[0]);
+    }
+)";
+
+const char *sample_write_only_image_test_kernel = R"(
+    __kernel void write_only_image_test(__read_only image2d_t src, __global uint4 *dst)
+    {
+        dst[0]=read_imageui(src, (int2)(get_global_id(0), get_global_id(1)));
+    }
+)";
+
+const char *sample_arg_size_test_kernel = R"(
+    %s
+    __kernel void arg_size_test(%s src, __global %s *dst)
+    {
+        dst[0]=src;
+    }
+)";
+
+REGISTER_TEST(get_kernel_info)
 {
     int error;
     cl_program program, testProgram;
@@ -171,7 +263,7 @@ int test_get_kernel_info(cl_device_id deviceID, cl_context context, cl_command_q
     return 0;
 }
 
-int test_execute_kernel_local_sizes(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(execute_kernel_local_sizes)
 {
     int error;
     clProgramWrapper program;
@@ -302,7 +394,7 @@ int test_execute_kernel_local_sizes(cl_device_id deviceID, cl_context context, c
     return 0;
 }
 
-int test_set_kernel_arg_by_index(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(set_kernel_arg_by_index)
 {
     int error;
     clProgramWrapper program;
@@ -372,7 +464,7 @@ int test_set_kernel_arg_by_index(cl_device_id deviceID, cl_context context, cl_c
     return 0;
 }
 
-int test_set_kernel_arg_constant(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(set_kernel_arg_constant)
 {
     int error;
     clProgramWrapper program;
@@ -389,8 +481,8 @@ int test_set_kernel_arg_constant(cl_device_id deviceID, cl_context context, cl_c
     std::vector<cl_int> randomTestDataB(num_elements);
 
     /* Verify our test buffer won't be bigger than allowed */
-    error = clGetDeviceInfo( deviceID, CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE, sizeof( maxSize ), &maxSize, 0 );
-    test_error( error, "Unable to get max constant buffer size" );
+    maxSize = get_device_info_max_constant_buffer_size(
+        device, MAX_DEVICE_MEMORY_SIZE_DIVISOR);
     if (maxSize < sizeof(cl_int) * num_elements)
     {
         log_error( "ERROR: Unable to test constant argument to kernel: max size of constant buffer is reported as %d!\n", (int)maxSize );
@@ -459,7 +551,7 @@ int test_set_kernel_arg_constant(cl_device_id deviceID, cl_context context, cl_c
     return 0;
 }
 
-int test_set_kernel_arg_struct_array(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(set_kernel_arg_struct_array)
 {
     int error;
     clProgramWrapper program;
@@ -488,11 +580,16 @@ int test_set_kernel_arg_struct_array(cl_device_id deviceID, cl_context context, 
     }
 
     /* Create some I/O streams */
+    // The kernel and the host reference both compute A + B as a plain int, so
+    // keep every operand in [-CL_INT_MAX / 2, CL_INT_MAX / 2]: the sum then
+    // stays representable and the arithmetic stays defined.
+    const cl_int max_addend = CL_INT_MAX / 2;
+
     d = init_genrand( gRandomSeed );
     for (i = 0; i < num_elements; i++)
     {
-        image_pair[i].A = (cl_int)genrand_int32(d);
-        image_pair[i].B = (cl_int)genrand_int32(d);
+        image_pair[i].A = (cl_int)get_random_long(-max_addend, max_addend, d);
+        image_pair[i].B = (cl_int)get_random_long(-max_addend, max_addend, d);
     }
     free_mtdata(d); d = NULL;
 
@@ -536,7 +633,7 @@ int test_set_kernel_arg_struct_array(cl_device_id deviceID, cl_context context, 
     return 0;
 }
 
-int test_create_kernels_in_program(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(create_kernels_in_program)
 {
     int error;
     cl_program program;
@@ -565,7 +662,7 @@ int test_create_kernels_in_program(cl_device_id deviceID, cl_context context, cl
     return 0;
 }
 
-int test_kernel_global_constant(cl_device_id deviceID, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(kernel_global_constant)
 {
     int error;
     clProgramWrapper program;
@@ -634,5 +731,532 @@ int test_kernel_global_constant(cl_device_id deviceID, cl_context context, cl_co
     return 0;
 }
 
+REGISTER_TEST(negative_set_immutable_memory_to_writeable_kernel_arg)
+{
+    REQUIRE_EXTENSION("cl_ext_immutable_memory_objects");
 
+    cl_int error = CL_SUCCESS;
+    clProgramWrapper program;
+    clKernelWrapper kernels[2];
+    clMemWrapper image, buffer;
+    const char *test_kernels[2] = { sample_const_test_kernel[0],
+                                    sample_image_test_kernel[0] };
+    constexpr cl_image_format formats = { CL_RGBA, CL_UNSIGNED_INT8 };
+    constexpr size_t size_dim = 128;
 
+    // Setup the test
+    error = create_single_kernel_helper(context, &program, nullptr, 2,
+                                        test_kernels, nullptr);
+    test_error(error, "Unable to build test program");
+
+    kernels[0] = clCreateKernel(program, "sample_test", &error);
+    test_error(error, "Unable to get sample_test kernel for built program");
+
+    kernels[1] = clCreateKernel(program, "sample_image_test", &error);
+    test_error(error,
+               "Unable to get sample_image_test kernel for built program");
+
+    std::vector<cl_uchar> mem_data(size_dim * size_dim * 4);
+    buffer = clCreateBuffer(context, CL_MEM_IMMUTABLE_EXT | CL_MEM_USE_HOST_PTR,
+                            sizeof(cl_int) * size_dim, mem_data.data(), &error);
+    test_error(error, "clCreateBuffer failed");
+
+    image = create_image_2d(context, CL_MEM_IMMUTABLE_EXT | CL_MEM_USE_HOST_PTR,
+                            &formats, size_dim, size_dim, 0, mem_data.data(),
+                            &error);
+    test_error(error, "create_image_2d failed");
+
+    // Run the test
+    error = clSetKernelArg(kernels[0], 0, sizeof(buffer), &buffer);
+    test_error(error, "clSetKernelArg failed");
+
+    error = clSetKernelArg(kernels[0], 2, sizeof(buffer), &buffer);
+    test_failure_error_ret(error, CL_INVALID_ARG_VALUE,
+                           "clSetKernelArg is supposed to fail "
+                           "with CL_INVALID_ARG_VALUE when a buffer is "
+                           "created with CL_MEM_IMMUTABLE_EXT is "
+                           "passed to a non-constant kernel argument",
+                           TEST_FAIL);
+
+    error = clSetKernelArg(kernels[1], 0, sizeof(image), &image);
+    test_error(error, "clSetKernelArg failed");
+
+    error = clSetKernelArg(kernels[1], 1, sizeof(image), &image);
+    test_failure_error_ret(error, CL_INVALID_ARG_VALUE,
+                           "clSetKernelArg is supposed to fail "
+                           "with CL_INVALID_ARG_VALUE when an image is "
+                           "created with CL_MEM_IMMUTABLE_EXT is "
+                           "passed to a write_only kernel argument",
+                           TEST_FAIL);
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_set_kernel_arg_invalid_image_msaa)
+{
+    PASSIVE_REQUIRE_IMAGE_SUPPORT(device)
+
+    REQUIRE_EXTENSION("cl_khr_gl_msaa_sharing");
+
+    cl_int error = CL_SUCCESS;
+    clProgramWrapper program;
+    clKernelWrapper kernel;
+
+    std::vector<std::pair<std::string, std::string>> image_types = {
+        { "image2d_msaa_t", "2" },
+        { "image2d_array_msaa_t", "4" },
+        { "image2d_msaa_depth_t", "2" },
+        { "image2d_array_msaa_depth_t", "4" }
+    };
+
+    constexpr cl_image_format format = { CL_RGBA, CL_UNSIGNED_INT8 };
+    constexpr size_t size_dim = 32;
+    clMemWrapper image =
+        create_image_2d(context, CL_MEM_READ_ONLY, &format, size_dim, size_dim,
+                        0, nullptr, &error);
+    test_error(error, "create_image_2d failed");
+
+    for (auto &el : image_types)
+    {
+        std::string program_source =
+            str_sprintf(std::string(sample_arg_image_msaa_test_kernel),
+                        el.first.c_str(), el.second.c_str(), el.second.c_str());
+
+        const char *ptr = program_source.c_str();
+        error = create_single_kernel_helper(context, &program, &kernel, 1, &ptr,
+                                            "arg_image_test");
+        test_error(error, "Unable to build test program");
+
+        error = clSetKernelArg(kernel, 0, sizeof(cl_mem), &image);
+        test_failure_error_ret(
+            error, CL_INVALID_MEM_OBJECT,
+            "clSetKernelArg is supposed to fail with CL_INVALID_MEM_OBJECT "
+            "when arg_value does not follow the rules described in spec for "
+            "msaa images",
+            TEST_FAIL);
+    }
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_set_kernel_arg_invalid_image)
+{
+    PASSIVE_REQUIRE_IMAGE_SUPPORT(device)
+
+    cl_int error = CL_SUCCESS;
+    clProgramWrapper program;
+    clKernelWrapper kernel;
+
+    const bool has_depth_images =
+        is_extension_available(device, "cl_khr_depth_images");
+
+    std::vector<std::pair<std::string, std::string>> image_types = {
+        { "image2d_t", "2" },
+        { "image2d_depth_t", "2" },
+        { "image3d_t", "4" },
+        { "image1d_t", "" },
+        { "image1d_array_t", "2" },
+        { "image2d_array_t", "4" },
+        { "image2d_array_depth_t", "4" }
+    };
+
+    clMemWrapper buffer = clCreateBuffer(context, CL_MEM_READ_WRITE,
+                                         sizeof(cl_float), nullptr, &error);
+    test_error(error, "clCreateBuffer failed");
+
+    for (auto &el : image_types)
+    {
+        if (!has_depth_images
+            && (el.first == "image2d_depth_t"
+                || el.first == "image2d_array_depth_t"))
+        {
+            log_info("Skipping %s: cl_khr_depth_images not supported\n",
+                     el.first.c_str());
+            continue;
+        }
+
+        std::string program_source =
+            str_sprintf(std::string(sample_arg_image_test_kernel),
+                        el.first.c_str(), el.second.c_str(), el.second.c_str());
+
+        const char *ptr = program_source.c_str();
+        error = create_single_kernel_helper(context, &program, &kernel, 1, &ptr,
+                                            "arg_image_test");
+        test_error(error, "Unable to build test program");
+
+        error = clSetKernelArg(kernel, 0, sizeof(cl_mem), &buffer);
+        test_failure_error_ret(
+            error, CL_INVALID_MEM_OBJECT,
+            "clSetKernelArg is supposed to fail with CL_INVALID_MEM_OBJECT "
+            "when arg_value does not follow the rules described in spec for a "
+            "depth memory object or memory array object argument",
+            TEST_FAIL);
+    }
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_invalid_arg_queue)
+{
+    OpenCLCFeatures features;
+    get_device_cl_c_features(device, features);
+
+    const Version clc_version = get_device_latest_cl_c_version(device);
+    if (clc_version < Version(2, 0)
+        || (clc_version >= Version(3, 0)
+            && !features.supports__opencl_c_device_enqueue))
+        return TEST_SKIPPED_ITSELF;
+
+    std::string build_opts = "-cl-std=CL" + clc_version.to_string();
+
+    cl_int error = CL_SUCCESS;
+    clProgramWrapper program;
+    clKernelWrapper queue_arg_kernel;
+    clCommandQueueWrapper queue_arg;
+
+    // Setup the test
+    error = create_single_kernel_helper(context, &program, &queue_arg_kernel, 1,
+                                        &sample_queue_test_kernel, "queue_test",
+                                        build_opts.c_str());
+    test_error(error, "Unable to create test kernel");
+
+    // Run the test - CL_INVALID_DEVICE_QUEUE
+    error = clSetKernelArg(queue_arg_kernel, 0, sizeof(cl_command_queue),
+                           &queue_arg);
+    test_failure_error_ret(
+        error, CL_INVALID_DEVICE_QUEUE,
+        "clSetKernelArg is supposed to fail with CL_INVALID_DEVICE_QUEUE when "
+        "the specified arg_value is not a valid device queue object",
+        TEST_FAIL);
+
+    // Run the test with host-side queue and expect CL_INVALID_DEVICE_QUEUE
+    error =
+        clSetKernelArg(queue_arg_kernel, 0, sizeof(cl_command_queue), queue);
+    test_failure_error_ret(
+        error, CL_INVALID_DEVICE_QUEUE,
+        "clSetKernelArg is supposed to fail with CL_INVALID_DEVICE_QUEUE when "
+        "the specified arg_value is not a valid device queue object",
+        TEST_FAIL);
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_invalid_arg_sampler)
+{
+    PASSIVE_REQUIRE_IMAGE_SUPPORT(device)
+
+    cl_int error = CL_SUCCESS;
+
+    clProgramWrapper program;
+    clKernelWrapper sampler_arg_kernel;
+
+    // Setup the test
+    error =
+        create_single_kernel_helper(context, &program, nullptr, 1,
+                                    &sample_sampler_size_test_kernel, nullptr);
+    test_error(error, "Unable to build test program");
+
+    sampler_arg_kernel = clCreateKernel(program, "sampler_size_test", &error);
+    test_error(error,
+               "Unable to get sampler_size_test kernel for built program");
+
+    // Run the test - CL_INVALID_SAMPLER
+    error = clSetKernelArg(sampler_arg_kernel, 0, sizeof(cl_sampler), nullptr);
+    test_failure_error_ret(
+        error, CL_INVALID_SAMPLER,
+        "clSetKernelArg is supposed to fail with CL_INVALID_SAMPLER when "
+        "argument is declared to be of type sampler_t and the specified "
+        "arg_value is not a valid sampler object",
+        TEST_FAIL);
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_invalid_arg_sampler_size)
+{
+    PASSIVE_REQUIRE_IMAGE_SUPPORT(device)
+
+    cl_int error = CL_SUCCESS;
+    clProgramWrapper program;
+    clKernelWrapper sampler_arg_kernel;
+
+    // Setup the test
+    error =
+        create_single_kernel_helper(context, &program, nullptr, 1,
+                                    &sample_sampler_size_test_kernel, nullptr);
+    test_error(error, "Unable to build test program");
+
+    sampler_arg_kernel = clCreateKernel(program, "sampler_size_test", &error);
+    test_error(error,
+               "Unable to get sampler_size_test kernel for built program");
+
+    clSamplerWrapper sampler = clCreateSampler(
+        context, CL_FALSE, CL_ADDRESS_NONE, CL_FILTER_NEAREST, &error);
+    test_error(error, "Unable to create sampler");
+
+    // Run the test - CL_INVALID_ARG_SIZE
+    error =
+        clSetKernelArg(sampler_arg_kernel, 0, sizeof(cl_sampler) * 2, &sampler);
+    test_failure_error_ret(
+        error, CL_INVALID_ARG_SIZE,
+        "clSetKernelArg is supposed to fail with CL_INVALID_ARG_SIZE when "
+        "argument is a sampler object and arg_size > sizeof(cl_sampler)",
+        TEST_FAIL);
+
+    error =
+        clSetKernelArg(sampler_arg_kernel, 0, sizeof(cl_sampler) / 2, &sampler);
+    test_failure_error_ret(
+        error, CL_INVALID_ARG_SIZE,
+        "clSetKernelArg is supposed to fail with CL_INVALID_ARG_SIZE when "
+        "argument is a sampler object and arg_size < sizeof(cl_sampler)",
+        TEST_FAIL);
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_invalid_arg_size)
+{
+    std::vector<ExplicitType> exp_types = { kChar,  kUChar, kShort, kUShort,
+                                            kInt,   kUInt,  kLong,  kULong,
+                                            kFloat, kHalf,  kDouble };
+
+    bool fp16_supported = is_extension_available(device, "cl_khr_fp16");
+    bool fp64_supported = is_extension_available(device, "cl_khr_fp64");
+
+    for (unsigned int type_num = 0; type_num < exp_types.size(); type_num++)
+    {
+        auto type = exp_types[type_num];
+
+        if ((type == kLong || type == kULong) && !gHasLong)
+            continue;
+        else if (type == kDouble && !fp64_supported)
+            continue;
+        else if (type == kHalf && !fp16_supported)
+            continue;
+        else if (strchr(get_explicit_type_name(type), ' ') != 0)
+            continue;
+
+        std::array<unsigned int, 5> sizes = { 1, 2, 4, 8, 16 };
+        std::vector<char> buf(sizeof(cl_ulong16), 0);
+        for (unsigned i = 0; i < sizes.size(); i++)
+        {
+            clProgramWrapper program;
+            clKernelWrapper kernel;
+
+            size_t destStride = get_explicit_type_size(type) * sizes[i];
+
+            std::ostringstream vecNameStr;
+            vecNameStr << get_explicit_type_name(type);
+            if (sizes[i] != 1) vecNameStr << sizes[i];
+
+            std::string ext_str;
+            if (type == kDouble)
+                ext_str = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n";
+
+            if (type == kHalf)
+                ext_str = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n";
+
+            auto vt_name = vecNameStr.str();
+            std::string program_source =
+                str_sprintf(std::string(sample_arg_size_test_kernel),
+                            ext_str.c_str(), vt_name.c_str(), vt_name.c_str());
+
+            const char *ptr = program_source.c_str();
+            cl_int error = create_single_kernel_helper(
+                context, &program, &kernel, 1, &ptr, "arg_size_test");
+            test_error(error, "Unable to build test program!");
+
+            // Run the test
+            size_t reduced = destStride / 2;
+            error = clSetKernelArg(kernel, 0, reduced, buf.data());
+            if (error != CL_INVALID_ARG_SIZE)
+            {
+                std::stringstream sstr;
+                sstr << "clSetKernelArg is supposed to fail "
+                        "with CL_INVALID_ARG_SIZE with type "
+                     << vecNameStr.str() << " and sizeof " << reduced
+                     << std::endl;
+                log_error("%s", sstr.str().c_str());
+                return TEST_FAIL;
+            }
+        }
+    }
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_invalid_arg_mem_obj)
+{
+    cl_int error = CL_SUCCESS;
+    clProgramWrapper program;
+    clKernelWrapper mem_obj_arg_kernel;
+
+    // Setup the test
+    error =
+        create_single_kernel_helper(context, &program, nullptr, 1,
+                                    &sample_mem_obj_size_test_kernel, nullptr);
+    test_error(error, "Unable to build test program");
+
+    mem_obj_arg_kernel = clCreateKernel(program, "mem_obj_size_test", &error);
+    test_error(error,
+               "Unable to get mem_obj_size_test kernel for built program");
+
+    std::vector<cl_uchar> mem_data(256, 0);
+    clMemWrapper buffer = clCreateBuffer(
+        context, CL_MEM_USE_HOST_PTR, mem_data.size(), mem_data.data(), &error);
+    test_error(error, "clCreateBuffer failed");
+
+    // Run the test - CL_INVALID_ARG_SIZE
+    error = clSetKernelArg(mem_obj_arg_kernel, 0, sizeof(cl_mem) * 2, &buffer);
+    test_failure_error_ret(
+        error, CL_INVALID_ARG_SIZE,
+        "clSetKernelArg is supposed to fail with CL_INVALID_ARG_SIZE when "
+        "argument is a memory object and arg_size > sizeof(cl_mem)",
+        TEST_FAIL);
+
+    error = clSetKernelArg(mem_obj_arg_kernel, 0, sizeof(cl_mem) / 2, &buffer);
+    test_failure_error_ret(
+        error, CL_INVALID_ARG_SIZE,
+        "clSetKernelArg is supposed to fail with CL_INVALID_ARG_SIZE when "
+        "argument is a memory object and arg_size < sizeof(cl_mem)",
+        TEST_FAIL);
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_invalid_kernel)
+{
+    cl_int error = CL_SUCCESS;
+    clKernelWrapper kernel;
+
+    clMemWrapper mem = clCreateBuffer(context, CL_MEM_READ_ONLY,
+                                      sizeof(cl_float), NULL, &error);
+    test_error(error, "clCreateBuffer failed");
+
+    // Run the test - CL_INVALID_KERNEL
+    error = clSetKernelArg(kernel, 0, sizeof(cl_mem), &mem);
+    test_failure_error_ret(
+        error, CL_INVALID_KERNEL,
+        "clSetKernelArg is supposed to fail with CL_INVALID_KERNEL when kernel "
+        "is not a valid kernel object",
+        TEST_FAIL);
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_invalid_arg_index)
+{
+    cl_int error = CL_SUCCESS;
+    clProgramWrapper program;
+    clKernelWrapper kernel;
+
+    // Setup the test
+    error = create_single_kernel_helper(context, &program, nullptr, 1,
+                                        sample_single_test_kernel, nullptr);
+    test_error(error, "Unable to build test program");
+
+    kernel = clCreateKernel(program, "sample_test", &error);
+    test_error(error, "Unable to get sample_test kernel for built program");
+
+    // Run the test - 2 index is out or range - expected CL_INVALID_ARG_INDEX
+    error = clSetKernelArg(kernel, 2, sizeof(cl_mem), nullptr);
+    test_failure_error_ret(
+        error, CL_INVALID_ARG_INDEX,
+        "clSetKernelArg is supposed to fail with CL_INVALID_ARG_INDEX when "
+        "arg_index is not a valid argument index",
+        TEST_FAIL);
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(local_arg_size_zero)
+{
+    cl_int error = CL_SUCCESS;
+    clProgramWrapper program;
+    clKernelWrapper local_arg_kernel;
+
+    // Setup the test
+    error = create_single_kernel_helper(
+        context, &program, nullptr, 1, &sample_local_size_test_kernel, nullptr);
+    test_error(error, "Unable to build test program");
+
+    local_arg_kernel = clCreateKernel(program, "local_size_test", &error);
+    test_error(error, "Unable to get local_size_test kernel for built program");
+
+    // Run the test
+    error = clSetKernelArg(local_arg_kernel, 0, 0, nullptr);
+
+    const Version version = get_platform_cl_version(device);
+    if (version < Version(3, 1))
+    {
+        test_failure_error_ret(
+            error, CL_INVALID_ARG_SIZE,
+            "For an OpenCL platform prior to OpenCL 3.1, setting the size of a "
+            "local memory kernel argument to zero is an error",
+            TEST_FAIL);
+    }
+    else
+    {
+        test_error(
+            error,
+            "For an OpenCL 3.1 platform and newer, setting the size of a local "
+            "memory kernel argument to zero is valid.");
+    }
+
+    return TEST_PASS;
+}
+
+REGISTER_TEST(negative_set_read_write_image_arg)
+{
+    cl_int error = CL_SUCCESS;
+    clProgramWrapper program;
+    clKernelWrapper write_image_kernel, read_image_kernel;
+    clMemWrapper write_only_image, read_only_image;
+    const char *test_kernels[2] = { sample_read_only_image_test_kernel,
+                                    sample_write_only_image_test_kernel };
+    constexpr cl_image_format format = { CL_RGBA, CL_UNSIGNED_INT8 };
+    const int size_dim = 128;
+
+    PASSIVE_REQUIRE_IMAGE_SUPPORT(device);
+
+    // Setup the test
+    error = create_single_kernel_helper(context, &program, nullptr, 2,
+                                        test_kernels, nullptr);
+    test_error(error, "Unable to build test program");
+
+    read_image_kernel = clCreateKernel(program, "read_only_image_test", &error);
+    test_error(error,
+               "Unable to get read_only_image_test kernel for built program");
+
+    write_image_kernel =
+        clCreateKernel(program, "write_only_image_test", &error);
+    test_error(error,
+               "Unable to get write_only_image_test kernel for built program");
+
+    read_only_image = create_image_2d(context, CL_MEM_READ_ONLY, &format,
+                                      size_dim, size_dim, 0, nullptr, &error);
+    test_error(error, "create_image_2d failed");
+
+    write_only_image = create_image_2d(context, CL_MEM_WRITE_ONLY, &format,
+                                       size_dim, size_dim, 0, nullptr, &error);
+    test_error(error, "create_image_2d failed");
+
+    // Run the test
+    error = clSetKernelArg(read_image_kernel, 0, sizeof(read_only_image),
+                           &read_only_image);
+    test_failure_error_ret(error, CL_INVALID_ARG_VALUE,
+                           "clSetKernelArg is supposed to fail "
+                           "with CL_INVALID_ARG_VALUE when an image is "
+                           "created with CL_MEM_READ_ONLY is "
+                           "passed to a write_only kernel argument",
+                           TEST_FAIL);
+
+    error = clSetKernelArg(write_image_kernel, 0, sizeof(write_only_image),
+                           &write_only_image);
+    test_failure_error_ret(error, CL_INVALID_ARG_VALUE,
+                           "clSetKernelArg is supposed to fail "
+                           "with CL_INVALID_ARG_VALUE when an image is "
+                           "created with CL_MEM_WRITE_ONLY is "
+                           "passed to a read_only kernel argument",
+                           TEST_FAIL);
+
+    return TEST_PASS;
+}

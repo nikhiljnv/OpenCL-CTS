@@ -48,7 +48,7 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
 
     CResult result;
 
-    std::auto_ptr<CDeviceWrapper> deviceWrapper;
+    std::unique_ptr<CDeviceWrapper> deviceWrapper;
     if (!DeviceCreate(adapterType, deviceWrapper))
     {
         result.ResultSub(CResult::TEST_ERROR);
@@ -102,7 +102,7 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
         }
 
         void *objectSrcHandle = 0;
-        std::auto_ptr<CSurfaceWrapper> surfaceSrc;
+        std::unique_ptr<CSurfaceWrapper> surfaceSrc;
         if (!MediaSurfaceCreate(adapterType, width, height, surfaceFormat,
                                 *deviceWrapper, surfaceSrc,
                                 (sharedHandle == SHARED_HANDLE_ENABLED) ? true
@@ -116,7 +116,7 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
         }
 
         void *objectDstHandle = 0;
-        std::auto_ptr<CSurfaceWrapper> surfaceDst;
+        std::unique_ptr<CSurfaceWrapper> surfaceDst;
         if (!MediaSurfaceCreate(adapterType, width, height, surfaceFormat,
                                 *deviceWrapper, surfaceDst,
                                 (sharedHandle == SHARED_HANDLE_ENABLED) ? true
@@ -224,7 +224,7 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
 
             error = clEnqueueAcquireDX9MediaSurfacesKHR(
                 cmdQueue, static_cast<cl_uint>(memObjSrcList.size()),
-                &memObjSrcList[0], 0, 0, 0);
+                &memObjSrcList[0], 0, NULL, NULL);
             if (error != CL_SUCCESS)
             {
                 log_error("clEnqueueAcquireDX9MediaSurfacesKHR failed: %s\n",
@@ -235,7 +235,7 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
 
             error = clEnqueueAcquireDX9MediaSurfacesKHR(
                 cmdQueue, static_cast<cl_uint>(memObjDstList.size()),
-                &memObjDstList[0], 0, 0, 0);
+                &memObjDstList[0], 0, NULL, NULL);
             if (error != CL_SUCCESS)
             {
                 log_error("clEnqueueAcquireDX9MediaSurfacesKHR failed: %s\n",
@@ -340,15 +340,16 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
 
                 if (imageResOut[0] != planeWidth)
                 {
-                    log_error("Invalid width value, test = %i, expected = %i\n",
-                              imageResOut[0], planeWidth);
+                    log_error(
+                        "Invalid width value, test = %i, expected = %zu\n",
+                        imageResOut[0], planeWidth);
                     result.ResultSub(CResult::TEST_FAIL);
                 }
 
                 if (imageResOut[1] != planeHeight)
                 {
                     log_error(
-                        "Invalid height value, test = %i, expected = %i\n",
+                        "Invalid height value, test = %i, expected = %zu\n",
                         imageResOut[1], planeHeight);
                     result.ResultSub(CResult::TEST_FAIL);
                 }
@@ -370,14 +371,14 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
                             width, height))
             {
                 log_error(
-                    "Frame idx: %i, OCL objects are different than expected\n",
+                    "Frame idx: %zu, OCL objects are different than expected\n",
                     frameIdx);
                 result.ResultSub(CResult::TEST_FAIL);
             }
 
             error = clEnqueueReleaseDX9MediaSurfacesKHR(
                 cmdQueue, static_cast<cl_uint>(memObjSrcList.size()),
-                &memObjSrcList[0], 0, 0, 0);
+                &memObjSrcList[0], 0, NULL, NULL);
             if (error != CL_SUCCESS)
             {
                 log_error("clEnqueueReleaseDX9MediaSurfacesKHR failed: %s\n",
@@ -387,7 +388,7 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
 
             error = clEnqueueReleaseDX9MediaSurfacesKHR(
                 cmdQueue, static_cast<cl_uint>(memObjDstList.size()),
-                &memObjDstList[0], 0, 0, 0);
+                &memObjDstList[0], 0, NULL, NULL);
             if (error != CL_SUCCESS)
             {
                 log_error("clEnqueueReleaseDX9MediaSurfacesKHR failed: %s\n",
@@ -406,9 +407,9 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
             if (!YUVCompare(surfaceFormat, bufferOut,
                             bufferExp[frameIdx % FRAME_NUM], width, height))
             {
-                log_error(
-                    "Frame idx: %i, media surface is different than expected\n",
-                    frameIdx);
+                log_error("Frame idx: %zu, media surface is different than "
+                          "expected\n",
+                          frameIdx);
                 result.ResultSub(CResult::TEST_FAIL);
             }
         }
@@ -434,14 +435,13 @@ int kernel_functions(cl_device_id deviceID, cl_context context,
     return result.Result();
 }
 
-int test_kernel(cl_device_id deviceID, cl_context context,
-                cl_command_queue queue, int num_elements)
+REGISTER_TEST(kernel)
 {
     CResult result;
 
 #if defined(_WIN32)
     // D3D9
-    if (kernel_functions(deviceID, context, queue, num_elements, 10, 256, 256,
+    if (kernel_functions(device, context, queue, num_elements, 10, 256, 256,
                          CL_ADAPTER_D3D9_KHR, SURFACE_FORMAT_NV12,
                          SHARED_HANDLE_DISABLED)
         != 0)
@@ -450,7 +450,7 @@ int test_kernel(cl_device_id deviceID, cl_context context,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (kernel_functions(deviceID, context, queue, num_elements, 3, 256, 256,
+    if (kernel_functions(device, context, queue, num_elements, 3, 256, 256,
                          CL_ADAPTER_D3D9_KHR, SURFACE_FORMAT_YV12,
                          SHARED_HANDLE_DISABLED)
         != 0)
@@ -460,7 +460,7 @@ int test_kernel(cl_device_id deviceID, cl_context context,
     }
 
     // D3D9EX
-    if (kernel_functions(deviceID, context, queue, num_elements, 5, 256, 512,
+    if (kernel_functions(device, context, queue, num_elements, 5, 256, 512,
                          CL_ADAPTER_D3D9EX_KHR, SURFACE_FORMAT_NV12,
                          SHARED_HANDLE_DISABLED)
         != 0)
@@ -469,7 +469,7 @@ int test_kernel(cl_device_id deviceID, cl_context context,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (kernel_functions(deviceID, context, queue, num_elements, 7, 512, 256,
+    if (kernel_functions(device, context, queue, num_elements, 7, 512, 256,
                          CL_ADAPTER_D3D9EX_KHR, SURFACE_FORMAT_NV12,
                          SHARED_HANDLE_ENABLED)
         != 0)
@@ -478,7 +478,7 @@ int test_kernel(cl_device_id deviceID, cl_context context,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (kernel_functions(deviceID, context, queue, num_elements, 10, 256, 256,
+    if (kernel_functions(device, context, queue, num_elements, 10, 256, 256,
                          CL_ADAPTER_D3D9EX_KHR, SURFACE_FORMAT_YV12,
                          SHARED_HANDLE_DISABLED)
         != 0)
@@ -487,7 +487,7 @@ int test_kernel(cl_device_id deviceID, cl_context context,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (kernel_functions(deviceID, context, queue, num_elements, 15, 128, 128,
+    if (kernel_functions(device, context, queue, num_elements, 15, 128, 128,
                          CL_ADAPTER_D3D9EX_KHR, SURFACE_FORMAT_YV12,
                          SHARED_HANDLE_ENABLED)
         != 0)
@@ -497,7 +497,7 @@ int test_kernel(cl_device_id deviceID, cl_context context,
     }
 
     // DXVA
-    if (kernel_functions(deviceID, context, queue, num_elements, 20, 128, 128,
+    if (kernel_functions(device, context, queue, num_elements, 20, 128, 128,
                          CL_ADAPTER_DXVA_KHR, SURFACE_FORMAT_NV12,
                          SHARED_HANDLE_DISABLED)
         != 0)
@@ -506,7 +506,7 @@ int test_kernel(cl_device_id deviceID, cl_context context,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (kernel_functions(deviceID, context, queue, num_elements, 40, 64, 64,
+    if (kernel_functions(device, context, queue, num_elements, 40, 64, 64,
                          CL_ADAPTER_DXVA_KHR, SURFACE_FORMAT_NV12,
                          SHARED_HANDLE_ENABLED)
         != 0)
@@ -515,7 +515,7 @@ int test_kernel(cl_device_id deviceID, cl_context context,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (kernel_functions(deviceID, context, queue, num_elements, 5, 512, 512,
+    if (kernel_functions(device, context, queue, num_elements, 5, 512, 512,
                          CL_ADAPTER_DXVA_KHR, SURFACE_FORMAT_YV12,
                          SHARED_HANDLE_DISABLED)
         != 0)
@@ -524,7 +524,7 @@ int test_kernel(cl_device_id deviceID, cl_context context,
         result.ResultSub(CResult::TEST_FAIL);
     }
 
-    if (kernel_functions(deviceID, context, queue, num_elements, 2, 1024, 1024,
+    if (kernel_functions(device, context, queue, num_elements, 2, 1024, 1024,
                          CL_ADAPTER_DXVA_KHR, SURFACE_FORMAT_YV12,
                          SHARED_HANDLE_ENABLED)
         != 0)

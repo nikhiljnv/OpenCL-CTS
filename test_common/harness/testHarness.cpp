@@ -14,21 +14,30 @@
 // limitations under the License.
 //
 #include "testHarness.h"
+#include "stringHelpers.h"
 #include "compat.h"
 #include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <cassert>
+#include <deque>
+#include <filesystem>
+#include <mutex>
+#include <set>
 #include <stdexcept>
+#include <thread>
+#include <optional>
+#include <string_view>
 #include <vector>
-#include "threadTesting.h"
 #include "errorHelpers.h"
 #include "kernelHelpers.h"
 #include "fpcontrol.h"
 #include "typeWrappers.h"
 #include "imageHelpers.h"
 #include "parseParameters.h"
+
+namespace fs = std::filesystem;
 
 #if !defined(_WIN32)
 #include <sys/utsname.h>
@@ -57,8 +66,106 @@ int gInfNanSupport = 1;
 int gIsEmbedded = 0;
 int gHasLong = 1;
 bool gCoreILProgram = true;
+int gInvalidObject = InvalidObject::Nullptr;
 
 #define DEFAULT_NUM_ELEMENTS 0x4000
+
+test_definition *test_registry::definitions() { return &m_definitions[0]; }
+
+size_t test_registry::num_tests() { return m_definitions.size(); }
+
+void test_registry::add_test(test *t, const char *name, Version version)
+{
+
+    m_tests.push_back(t);
+    test_definition testDef;
+    testDef.func = t->getFunction();
+    testDef.name = name;
+    testDef.min_version = version;
+    m_definitions.push_back(testDef);
+}
+
+test_registry &test_registry::getInstance()
+{
+    static test_registry instance;
+    return instance;
+}
+
+static int saveResultsToJson(const char *suiteName, const char *args,
+                             test_definition testList[],
+                             unsigned char selectedTestList[],
+                             test_status resultTestList[], int testNum)
+{
+    char *fileName = getenv("CL_CONFORMANCE_RESULTS_FILENAME");
+    if (fileName == nullptr)
+    {
+        return EXIT_SUCCESS;
+    }
+
+    fs::path file_path(fileName);
+
+    // When running under Bazel test, prepend the Bazel output directory to
+    // the provided path
+    if (nullptr != getenv("BAZEL_TEST"))
+    {
+        char *bazel_output_dir = getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+        if (nullptr != bazel_output_dir)
+        {
+            file_path = fs::path(bazel_output_dir) / file_path;
+        }
+    }
+
+    auto file_path_str = to_string(file_path.u8string());
+    FILE *file = fopen(file_path_str.c_str(), "w");
+    if (NULL == file)
+    {
+        log_error("ERROR: Failed to open '%s' for writing results.\n",
+                  file_path_str.c_str());
+        return EXIT_FAILURE;
+    }
+
+    const char *save_map[] = { "success", "failure" };
+    const char *result_map[] = { "pass", "fail", "skip" };
+    const char *linebreak[] = { "", ",\n" };
+    int add_linebreak = 0;
+
+    fprintf(file, "{\n");
+    fprintf(file, "\t\"cmd\": \"%s\",\n", suiteName);
+    fprintf(file, "\t\"args\": \"%s\",\n", args);
+    fprintf(file, "\t\"results\": {\n");
+
+    for (int i = 0; i < testNum; ++i)
+    {
+        if (selectedTestList[i])
+        {
+            fprintf(file, "%s\t\t\"%s\": \"%s\"", linebreak[add_linebreak],
+                    testList[i].name, result_map[(int)resultTestList[i]]);
+            add_linebreak = 1;
+        }
+    }
+    fprintf(file, "\n");
+
+    fprintf(file, "\t}\n");
+    fprintf(file, "}\n");
+
+    int ret = fclose(file) ? EXIT_FAILURE : EXIT_SUCCESS;
+
+    log_info("Saving results to %s: %s!\n", file_path_str.c_str(),
+             save_map[ret]);
+
+    return ret;
+}
+
+int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
+                            test_definition testList[],
+                            int forceNoContextCreation,
+                            cl_command_queue_properties queueProps,
+                            DeviceCheckFn deviceCheckFn)
+{
+    return runTestHarnessWithCheckAndParse(argc, argv, testNum, testList,
+                                           forceNoContextCreation, queueProps,
+                                           deviceCheckFn, NULL);
+}
 
 int runTestHarness(int argc, const char *argv[], int testNum,
                    test_definition testList[], int forceNoContextCreation,
@@ -68,19 +175,34 @@ int runTestHarness(int argc, const char *argv[], int testNum,
                                    forceNoContextCreation, queueProps, NULL);
 }
 
-int skip_init_info(int count)
+int suite_did_not_pass_init(const char *suiteName, const char *args,
+                            test_status status, int testNum,
+                            test_definition testList[])
 {
-    log_info("Test skipped while initialization\n");
-    log_info("SKIPPED %d of %d tests.\n", count, count);
-    return EXIT_SUCCESS;
+    if (status == TEST_SKIPPED_ITSELF)
+    {
+        status = TEST_SKIP;
+    }
+    std::vector<unsigned char> selectedTestList(testNum, 1);
+    std::vector<test_status> resultTestList(testNum, status);
+
+    int ret =
+        saveResultsToJson(suiteName, args, testList, selectedTestList.data(),
+                          resultTestList.data(), testNum);
+
+    log_info("Test %s while initialization\n",
+             status == TEST_SKIP ? "skipped" : "failed");
+    log_info("%s %d of %d tests.\n", status == TEST_SKIP ? "SKIPPED" : "FAILED",
+             testNum, testNum);
+
+    if (ret != EXIT_SUCCESS)
+    {
+        return ret;
+    }
+
+    return status == TEST_SKIP ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-int fail_init_info(int count)
-{
-    log_info("Test failed while initialization\n");
-    log_info("FAILED %d of %d tests.\n", count, count);
-    return EXIT_FAILURE;
-}
 void version_expected_info(const char *test_name, const char *api_name,
                            const char *expected_version,
                            const char *device_version)
@@ -89,11 +211,49 @@ void version_expected_info(const char *test_name, const char *api_name,
              "reports %s version %s)\n",
              test_name, api_name, expected_version, api_name, device_version);
 }
-int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
-                            test_definition testList[],
-                            int forceNoContextCreation,
-                            cl_command_queue_properties queueProps,
-                            DeviceCheckFn deviceCheckFn)
+
+void update_argc_argv_from_args_list(std::vector<const char *> &argList,
+                                     int &argc, const char *argv[])
+{
+    argc = 0;
+    for (auto arg : argList)
+    {
+        argv[argc++] = arg;
+    }
+}
+
+static std::string removed_args_to_string(std::vector<std::string> &args)
+{
+    std::sort(args.begin(), args.end());
+    std::string result;
+    for (auto &arg : args)
+    {
+        result += arg + " ";
+    }
+    if (!result.empty())
+    {
+        result.erase(result.size() - 1);
+    }
+    return result;
+}
+static void list_tests(int testNum, test_definition testList[])
+{
+    std::set<std::string> names;
+    for (int i = 0; i < testNum; i++)
+    {
+        names.insert(testList[i].name);
+    }
+    for (const auto &name : names)
+    {
+        log_info("\t%s\n", name.c_str());
+    }
+}
+int runTestHarnessWithCheckAndParse(int argc, const char *argv[], int testNum,
+                                    test_definition testList[],
+                                    int forceNoContextCreation,
+                                    cl_command_queue_properties queueProps,
+                                    DeviceCheckFn deviceCheckFn,
+                                    ParseArgsFn parseArgsFn)
 {
     test_start();
 
@@ -110,6 +270,7 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
     int err, ret;
     char *endPtr;
     int based_on_env_var = 0;
+    std::vector<std::string> removed_args;
 
 
     /* Check for environment variable to set device type */
@@ -117,8 +278,11 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
     if (env_mode != NULL)
     {
         based_on_env_var = 1;
-        if (strcmp(env_mode, "gpu") == 0
-            || strcmp(env_mode, "CL_DEVICE_TYPE_GPU") == 0)
+        if (strcmp(env_mode, "all") == 0
+            || strcmp(env_mode, "CL_DEVICE_TYPE_ALL") == 0)
+            device_type = CL_DEVICE_TYPE_ALL;
+        else if (strcmp(env_mode, "gpu") == 0
+                 || strcmp(env_mode, "CL_DEVICE_TYPE_GPU") == 0)
             device_type = CL_DEVICE_TYPE_GPU;
         else if (strcmp(env_mode, "cpu") == 0
                  || strcmp(env_mode, "CL_DEVICE_TYPE_CPU") == 0)
@@ -126,6 +290,9 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
         else if (strcmp(env_mode, "accelerator") == 0
                  || strcmp(env_mode, "CL_DEVICE_TYPE_ACCELERATOR") == 0)
             device_type = CL_DEVICE_TYPE_ACCELERATOR;
+        else if (strcmp(env_mode, "custom") == 0
+                 || strcmp(env_mode, "CL_DEVICE_TYPE_CUSTOM") == 0)
+            device_type = CL_DEVICE_TYPE_CUSTOM;
         else if (strcmp(env_mode, "default") == 0
                  || strcmp(env_mode, "CL_DEVICE_TYPE_DEFAULT") == 0)
             device_type = CL_DEVICE_TYPE_DEFAULT;
@@ -166,43 +333,70 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
 
     /* Process the command line arguments */
 
-    argc = parseCustomParam(argc, argv);
+    bool help;
+    argc = parseCommonParamAndGetRemovedArgs(argc, argv, removed_args, help);
     if (argc == -1)
     {
         return EXIT_FAILURE;
     }
 
-    /* Special case: just list the tests */
-    if ((argc > 1)
-        && (!strcmp(argv[1], "-list") || !strcmp(argv[1], "-h")
-            || !strcmp(argv[1], "--help")))
+    if (gListTests)
+    {
+        list_tests(testNum, testList);
+        return EXIT_SUCCESS;
+    }
+
+    const char *suiteName = argv[0];
+    std::string help_description;
+    if (parseArgsFn != NULL)
+    {
+        help |= (parseArgsFn(argc, argv, removed_args, help_description)
+                 != TEST_PASS);
+    }
+
+    if (help)
     {
         char *fileName = getenv("CL_CONFORMANCE_RESULTS_FILENAME");
 
         log_info(
-            "Usage: %s [<test name>*] [pid<num>] [id<num>] [<device type>]\n",
-            argv[0]);
+            "Usage: %s %s[<test name>*] [pid<num>] [id<num>] [<device type>]\n",
+            argv[0], help_description.empty() ? "" : "[options] ");
         log_info("\t<test name>\tOne or more of: (wildcard character '*') "
                  "(default *)\n");
         log_info("\tpid<num>\tIndicates platform at index <num> should be used "
                  "(default 0).\n");
         log_info("\tid<num>\t\tIndicates device at index <num> should be used "
                  "(default 0).\n");
-        log_info("\t<device_type>\tcpu|gpu|accelerator|<CL_DEVICE_TYPE_*> "
+        log_info("\t<device_type>\tall|cpu|gpu|accelerator|<CL_DEVICE_TYPE_*> "
                  "(default CL_DEVICE_TYPE_DEFAULT)\n");
+        if (!help_description.empty())
+        {
+            log_info("Options:\n");
+            log_info("%s", help_description.c_str());
+        }
         log_info("\n");
         log_info("\tNOTE: You may pass environment variable "
                  "CL_CONFORMANCE_RESULTS_FILENAME (currently '%s')\n",
                  fileName != NULL ? fileName : "<undefined>");
         log_info("\t      to save results to JSON file.\n");
+        log_info("\t      When running in Bazel test this is relative to "
+                 "$TEST_UNDECLARED_OUTPUTS_DIR.\n");
 
         log_info("\n");
         log_info("Test names:\n");
-        for (int i = 0; i < testNum; i++)
-        {
-            log_info("\t%s\n", testList[i].name);
-        }
+        list_tests(testNum, testList);
         return EXIT_SUCCESS;
+    }
+
+    gWimpyMode |= (getenv("CL_WIMPY_MODE") != nullptr);
+    if (gWimpyMode)
+    {
+        log_info("\n");
+        log_info("**************************\n");
+        log_info("***    !! WARNING !!   ***\n");
+        log_info("*** Wimpy mode enabled ***\n");
+        log_info("**************************\n");
+        log_info("\n");
     }
 
     /* How are we supposed to seed the random # generators? */
@@ -237,8 +431,14 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
     /* Do we have a CPU/GPU specification? */
     if (argc > 1)
     {
-        if (strcmp(argv[argc - 1], "gpu") == 0
-            || strcmp(argv[argc - 1], "CL_DEVICE_TYPE_GPU") == 0)
+        if (strcmp(argv[argc - 1], "all") == 0
+            || strcmp(argv[argc - 1], "CL_DEVICE_TYPE_ALL") == 0)
+        {
+            device_type = CL_DEVICE_TYPE_ALL;
+            argc--;
+        }
+        else if (strcmp(argv[argc - 1], "gpu") == 0
+                 || strcmp(argv[argc - 1], "CL_DEVICE_TYPE_GPU") == 0)
         {
             device_type = CL_DEVICE_TYPE_GPU;
             argc--;
@@ -253,6 +453,12 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
                  || strcmp(argv[argc - 1], "CL_DEVICE_TYPE_ACCELERATOR") == 0)
         {
             device_type = CL_DEVICE_TYPE_ACCELERATOR;
+            argc--;
+        }
+        else if (strcmp(argv[argc - 1], "custom") == 0
+                 || strcmp(argv[argc - 1], "CL_DEVICE_TYPE_CUSTOM") == 0)
+        {
+            device_type = CL_DEVICE_TYPE_CUSTOM;
             argc--;
         }
         else if (strcmp(argv[argc - 1], "CL_DEVICE_TYPE_DEFAULT") == 0)
@@ -287,10 +493,14 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
 
     switch (device_type)
     {
+        case CL_DEVICE_TYPE_ALL: log_info("Requesting any device "); break;
         case CL_DEVICE_TYPE_GPU: log_info("Requesting GPU device "); break;
         case CL_DEVICE_TYPE_CPU: log_info("Requesting CPU device "); break;
         case CL_DEVICE_TYPE_ACCELERATOR:
             log_info("Requesting Accelerator device ");
+            break;
+        case CL_DEVICE_TYPE_CUSTOM:
+            log_info("Requesting Custom device ");
             break;
         case CL_DEVICE_TYPE_DEFAULT:
             log_info("Requesting Default device ");
@@ -470,18 +680,15 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
         log_error("Invalid device address bit size returned by device.\n");
         return EXIT_FAILURE;
     }
+
     if (gCompilationMode == kSpir_v)
     {
         test_status spirv_readiness = check_spirv_compilation_readiness(device);
         if (spirv_readiness != TEST_PASS)
         {
-            switch (spirv_readiness)
-            {
-                case TEST_PASS: break;
-                case TEST_FAIL: return fail_init_info(testNum);
-                case TEST_SKIP: return skip_init_info(testNum);
-                case TEST_SKIPPED_ITSELF: return skip_init_info(testNum);
-            }
+            auto args = removed_args_to_string(removed_args);
+            return suite_did_not_pass_init(suiteName, args.c_str(),
+                                           spirv_readiness, testNum, testList);
         }
     }
 
@@ -489,12 +696,11 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
     if ((deviceCheckFn != NULL))
     {
         test_status status = deviceCheckFn(device);
-        switch (status)
+        if (status != TEST_PASS)
         {
-            case TEST_PASS: break;
-            case TEST_FAIL: return fail_init_info(testNum);
-            case TEST_SKIP: return skip_init_info(testNum);
-            case TEST_SKIPPED_ITSELF: return skip_init_info(testNum);
+            auto args = removed_args_to_string(removed_args);
+            return suite_did_not_pass_init(suiteName, args.c_str(), status,
+                                           testNum, testList);
         }
     }
 
@@ -514,10 +720,12 @@ int runTestHarnessWithCheck(int argc, const char *argv[], int testNum,
     FPU_mode_type oldMode;
     DisableFTZ(&oldMode);
 #endif
+    test_harness_config config = { forceNoContextCreation, num_elements,
+                                   queueProps, gNumWorkerThreads };
 
-    int error = parseAndCallCommandLineTests(argc, argv, device, testNum,
-                                             testList, forceNoContextCreation,
-                                             queueProps, num_elements);
+    auto args = removed_args_to_string(removed_args);
+    int error = parseAndCallCommandLineTests(argc, argv, args.c_str(), device,
+                                             testNum, testList, config);
 
 #if defined(__APPLE__) && defined(__arm__)
     // Restore the old FP mode before leaving.
@@ -574,49 +782,6 @@ static int find_matching_tests(test_definition testList[],
     return EXIT_SUCCESS;
 }
 
-static int saveResultsToJson(const char *fileName, const char *suiteName,
-                             test_definition testList[],
-                             unsigned char selectedTestList[],
-                             test_status resultTestList[], int testNum)
-{
-    FILE *file = fopen(fileName, "w");
-    if (NULL == file)
-    {
-        log_error("ERROR: Failed to open '%s' for writing results.\n",
-                  fileName);
-        return EXIT_FAILURE;
-    }
-
-    const char *save_map[] = { "success", "failure" };
-    const char *result_map[] = { "pass", "fail", "skip" };
-    const char *linebreak[] = { "", ",\n" };
-    int add_linebreak = 0;
-
-    fprintf(file, "{\n");
-    fprintf(file, "\t\"cmd\": \"%s\",\n", suiteName);
-    fprintf(file, "\t\"results\": {\n");
-
-    for (int i = 0; i < testNum; ++i)
-    {
-        if (selectedTestList[i])
-        {
-            fprintf(file, "%s\t\t\"%s\": \"%s\"", linebreak[add_linebreak],
-                    testList[i].name, result_map[(int)resultTestList[i]]);
-            add_linebreak = 1;
-        }
-    }
-    fprintf(file, "\n");
-
-    fprintf(file, "\t}\n");
-    fprintf(file, "}\n");
-
-    int ret = fclose(file) ? 1 : 0;
-
-    log_info("Saving results to %s: %s!\n", fileName, save_map[ret]);
-
-    return ret;
-}
-
 static void print_results(int failed, int count, const char *name)
 {
     if (count < failed)
@@ -630,7 +795,7 @@ static void print_results(int failed, int count, const char *name)
         {
             log_info("PASSED %d of %d %ss.\n", count, count, name);
         }
-        else
+        else if (count > 0)
         {
             log_info("PASSED %s.\n", name);
         }
@@ -646,19 +811,17 @@ static void print_results(int failed, int count, const char *name)
             log_error("FAILED %s.\n", name);
         }
     }
+    fflush(stdout);
 }
 
-int parseAndCallCommandLineTests(int argc, const char *argv[],
+int parseAndCallCommandLineTests(int argc, const char *argv[], const char *args,
                                  cl_device_id device, int testNum,
                                  test_definition testList[],
-                                 int forceNoContextCreation,
-                                 cl_command_queue_properties queueProps,
-                                 int num_elements)
+                                 const test_harness_config &config)
 {
     int ret = EXIT_SUCCESS;
 
     unsigned char *selectedTestList = (unsigned char *)calloc(testNum, 1);
-    test_status *resultTestList = NULL;
 
     if (argc == 1)
     {
@@ -697,24 +860,27 @@ int parseAndCallCommandLineTests(int argc, const char *argv[],
 
     if (ret == EXIT_SUCCESS)
     {
-        resultTestList =
-            (test_status *)calloc(testNum, sizeof(*resultTestList));
+        std::vector<test_status> resultTestList(testNum, TEST_PASS);
 
-        callTestFunctions(testList, selectedTestList, resultTestList, testNum,
-                          device, forceNoContextCreation, num_elements,
-                          queueProps);
+        callTestFunctions(testList, selectedTestList, resultTestList.data(),
+                          testNum, device, config);
+
+        const int skipped =
+            std::count(resultTestList.begin(), resultTestList.end(), TEST_SKIP);
+        const int selected =
+            std::count(selectedTestList, selectedTestList + testNum, 1);
+        if (skipped > 0 && skipped == selected)
+        {
+            log_info("SKIPPED %d of %d tests.\n", skipped, selected);
+        }
 
         print_results(gFailCount, gTestCount, "sub-test");
         print_results(gTestsFailed, gTestsFailed + gTestsPassed, "test");
 
-        char *filename = getenv("CL_CONFORMANCE_RESULTS_FILENAME");
-        if (filename != NULL)
-        {
-            ret = saveResultsToJson(filename, argv[0], testList,
-                                    selectedTestList, resultTestList, testNum);
-        }
+        ret = saveResultsToJson(argv[0], args, testList, selectedTestList,
+                                resultTestList.data(), testNum);
 
-        if (std::any_of(resultTestList, resultTestList + testNum,
+        if (std::any_of(resultTestList.begin(), resultTestList.end(),
                         [](test_status result) {
                             switch (result)
                             {
@@ -730,26 +896,101 @@ int parseAndCallCommandLineTests(int argc, const char *argv[],
     }
 
     free(selectedTestList);
-    free(resultTestList);
 
     return ret;
+}
+
+struct test_harness_state
+{
+    test_definition *tests;
+    test_status *results;
+    cl_device_id device;
+    test_harness_config config;
+};
+
+static std::deque<int> gTestQueue;
+static std::mutex gTestStateMutex;
+
+void test_function_runner(test_harness_state *state)
+{
+    int testID;
+    test_definition test;
+    while (true)
+    {
+        // Attempt to get a test
+        {
+            std::lock_guard<std::mutex> lock(gTestStateMutex);
+
+            // The queue is empty, we're done
+            if (gTestQueue.size() == 0)
+            {
+                return;
+            }
+
+            // Get the test at the front of the queue
+            testID = gTestQueue.front();
+            gTestQueue.pop_front();
+            test = state->tests[testID];
+        }
+
+        // Execute test
+        auto status =
+            callSingleTestFunction(test, state->device, state->config);
+
+        // Store result
+        {
+            std::lock_guard<std::mutex> lock(gTestStateMutex);
+            state->results[testID] = status;
+        }
+    }
 }
 
 void callTestFunctions(test_definition testList[],
                        unsigned char selectedTestList[],
                        test_status resultTestList[], int testNum,
-                       cl_device_id deviceToUse, int forceNoContextCreation,
-                       int numElementsToUse,
-                       cl_command_queue_properties queueProps)
+                       cl_device_id deviceToUse,
+                       const test_harness_config &config)
 {
-    for (int i = 0; i < testNum; ++i)
+    // Execute tests serially
+    if (config.numWorkerThreads == 0)
     {
-        if (selectedTestList[i])
+        for (int i = 0; i < testNum; ++i)
         {
-            resultTestList[i] = callSingleTestFunction(
-                testList[i], deviceToUse, forceNoContextCreation,
-                numElementsToUse, queueProps);
+            if (selectedTestList[i])
+            {
+                resultTestList[i] =
+                    callSingleTestFunction(testList[i], deviceToUse, config);
+            }
         }
+        // Execute tests in parallel with the specified number of worker threads
+    }
+    else
+    {
+        // Queue all tests that need to run
+        for (int i = 0; i < testNum; ++i)
+        {
+            if (selectedTestList[i])
+            {
+                gTestQueue.push_back(i);
+            }
+        }
+
+        // Spawn thread pool
+        std::vector<std::thread *> threads;
+        test_harness_state state = { testList, resultTestList, deviceToUse,
+                                     config };
+        for (unsigned i = 0; i < config.numWorkerThreads; i++)
+        {
+            log_info("Spawning worker thread %u\n", i);
+            threads.push_back(new std::thread(test_function_runner, &state));
+        }
+
+        // Wait for all threads to complete
+        for (auto th : threads)
+        {
+            th->join();
+        }
+        assert(gTestQueue.size() == 0);
     }
 }
 
@@ -762,9 +1003,7 @@ void CL_CALLBACK notify_callback(const char *errinfo, const void *private_info,
 // Actual function execution
 test_status callSingleTestFunction(test_definition test,
                                    cl_device_id deviceToUse,
-                                   int forceNoContextCreation,
-                                   int numElementsToUse,
-                                   const cl_queue_properties queueProps)
+                                   const test_harness_config &config)
 {
     test_status status;
     cl_int error;
@@ -792,27 +1031,30 @@ test_status callSingleTestFunction(test_definition test,
     }
 
     /* Create a context to work with, unless we're told not to */
-    if (!forceNoContextCreation)
+    if (!config.forceNoContextCreation)
     {
         context = clCreateContext(NULL, 1, &deviceToUse, notify_callback, NULL,
                                   &error);
         if (!context)
         {
             print_error(error, "Unable to create testing context");
+            gFailCount++;
+            gTestsFailed++;
             return TEST_FAIL;
         }
 
         if (device_version < Version(2, 0))
         {
-            queue =
-                clCreateCommandQueue(context, deviceToUse, queueProps, &error);
+            queue = clCreateCommandQueue(context, deviceToUse,
+                                         config.queueProps, &error);
         }
         else
         {
             const cl_command_queue_properties cmd_queueProps =
-                (queueProps) ? CL_QUEUE_PROPERTIES : 0;
-            cl_command_queue_properties queueCreateProps[] = { cmd_queueProps,
-                                                               queueProps, 0 };
+                (config.queueProps) ? CL_QUEUE_PROPERTIES : 0;
+            cl_command_queue_properties queueCreateProps[] = {
+                cmd_queueProps, config.queueProps, 0
+            };
             queue = clCreateCommandQueueWithProperties(
                 context, deviceToUse, &queueCreateProps[0], &error);
         }
@@ -821,6 +1063,8 @@ test_status callSingleTestFunction(test_definition test,
         {
             print_error(error, "Unable to create testing command queue");
             clReleaseContext(context);
+            gFailCount++;
+            gTestsFailed++;
             return TEST_FAIL;
         }
     }
@@ -835,7 +1079,8 @@ test_status callSingleTestFunction(test_definition test,
     }
     else
     {
-        int ret = test.func(deviceToUse, context, queue, numElementsToUse);
+        int ret =
+            test.func(deviceToUse, context, queue, config.numElementsToUse);
         if (ret == TEST_SKIPPED_ITSELF)
         {
             /* Tests can also let us know they're not supported by the
@@ -862,12 +1107,14 @@ test_status callSingleTestFunction(test_definition test,
     }
 
     /* Release the context */
-    if (!forceNoContextCreation)
+    if (!config.forceNoContextCreation)
     {
         int error = clFinish(queue);
         if (error)
         {
             log_error("clFinish failed: %s\n", IGetErrorString(error));
+            gFailCount++;
+            gTestsFailed++;
             status = TEST_FAIL;
         }
         clReleaseCommandQueue(queue);
@@ -974,6 +1221,53 @@ cl_device_id GetOpposingDevice(cl_device_id device)
     return NULL;
 }
 
+static Version get_cl_version_from_string(const char *check)
+{
+    if (strstr(check, "OpenCL 1.0") == check)
+        return Version(1, 0);
+    else if (strstr(check, "OpenCL 1.1") == check)
+        return Version(1, 1);
+    else if (strstr(check, "OpenCL 1.2") == check)
+        return Version(1, 2);
+    else if (strstr(check, "OpenCL 2.0") == check)
+        return Version(2, 0);
+    else if (strstr(check, "OpenCL 2.1") == check)
+        return Version(2, 1);
+    else if (strstr(check, "OpenCL 2.2") == check)
+        return Version(2, 2);
+    else if (strstr(check, "OpenCL 3.0") == check)
+        return Version(3, 0);
+    else if (strstr(check, "OpenCL 3.1") == check)
+        return Version(3, 1);
+
+    throw std::runtime_error(std::string("Unknown OpenCL version: ") + check);
+}
+
+Version get_platform_cl_version(cl_platform_id platform)
+{
+    size_t str_size;
+    cl_int err =
+        clGetPlatformInfo(platform, CL_PLATFORM_VERSION, 0, NULL, &str_size);
+    ASSERT_SUCCESS(err, "clGetPlatformInfo");
+
+    std::vector<char> str(str_size);
+    err = clGetPlatformInfo(platform, CL_PLATFORM_VERSION, str_size, str.data(),
+                            NULL);
+    ASSERT_SUCCESS(err, "clGetPlatformInfo");
+
+    return get_cl_version_from_string(str.data());
+}
+
+Version get_platform_cl_version(cl_device_id device)
+{
+    cl_platform_id platform;
+    cl_int err = clGetDeviceInfo(device, CL_DEVICE_PLATFORM, sizeof(platform),
+                                 &platform, NULL);
+    ASSERT_SUCCESS(err, "clGetDeviceInfo");
+
+    return get_platform_cl_version(platform);
+}
+
 Version get_device_cl_version(cl_device_id device)
 {
     size_t str_size;
@@ -985,23 +1279,7 @@ Version get_device_cl_version(cl_device_id device)
         clGetDeviceInfo(device, CL_DEVICE_VERSION, str_size, str.data(), NULL);
     ASSERT_SUCCESS(err, "clGetDeviceInfo");
 
-    if (strstr(str.data(), "OpenCL 1.0") != NULL)
-        return Version(1, 0);
-    else if (strstr(str.data(), "OpenCL 1.1") != NULL)
-        return Version(1, 1);
-    else if (strstr(str.data(), "OpenCL 1.2") != NULL)
-        return Version(1, 2);
-    else if (strstr(str.data(), "OpenCL 2.0") != NULL)
-        return Version(2, 0);
-    else if (strstr(str.data(), "OpenCL 2.1") != NULL)
-        return Version(2, 1);
-    else if (strstr(str.data(), "OpenCL 2.2") != NULL)
-        return Version(2, 2);
-    else if (strstr(str.data(), "OpenCL 3.0") != NULL)
-        return Version(3, 0);
-
-    throw std::runtime_error(std::string("Unknown OpenCL version: ")
-                             + str.data());
+    return get_cl_version_from_string(str.data());
 }
 
 bool check_device_spirv_version_reported(cl_device_id device)
@@ -1093,21 +1371,28 @@ Version get_device_spirv_il_version(cl_device_id device)
         ASSERT_SUCCESS(err, "clGetDeviceInfo");
     }
 
-    if (strstr(str.data(), "SPIR-V_1.0") != NULL)
-        return Version(1, 0);
-    else if (strstr(str.data(), "SPIR-V_1.1") != NULL)
-        return Version(1, 1);
-    else if (strstr(str.data(), "SPIR-V_1.2") != NULL)
-        return Version(1, 2);
-    else if (strstr(str.data(), "SPIR-V_1.3") != NULL)
-        return Version(1, 3);
-    else if (strstr(str.data(), "SPIR-V_1.4") != NULL)
-        return Version(1, 4);
-    else if (strstr(str.data(), "SPIR-V_1.5") != NULL)
-        return Version(1, 5);
-
-    throw std::runtime_error(std::string("Unknown SPIR-V version: ")
-                             + str.data());
+    std::optional<Version> best;
+    const std::string_view sv(str.data());
+    constexpr std::string_view prefix = "SPIR-V_";
+    for (size_t pos = sv.find(prefix); pos != std::string_view::npos;
+         pos = sv.find(prefix, pos + prefix.size()))
+    {
+        unsigned int maj, min;
+        if (sscanf(sv.data() + pos, "SPIR-V_%u.%u", &maj, &min) == 2)
+        {
+            Version v(maj, min);
+            if (!best || *best < v) best = v;
+        }
+    }
+    if (best)
+    {
+        return *best;
+    }
+    else
+    {
+        throw std::runtime_error(std::string("Unknown SPIR-V version: ")
+                                 + str.data());
+    }
 }
 
 test_status check_spirv_compilation_readiness(cl_device_id device)
@@ -1176,9 +1461,46 @@ cl_platform_id getPlatformFromDevice(cl_device_id deviceID)
     return platform;
 }
 
+/**
+ * Helper to return a string containing platform information
+ * for the specified platform info parameter.
+ */
+std::string get_platform_info_string(cl_platform_id platform,
+                                     cl_platform_info param_name)
+{
+    size_t size = 0;
+    int err;
+
+    if ((err = clGetPlatformInfo(platform, param_name, 0, NULL, &size))
+            != CL_SUCCESS
+        || size == 0)
+    {
+        throw std::runtime_error("clGetPlatformInfo failed\n");
+    }
+
+    std::vector<char> info(size);
+
+    if ((err = clGetPlatformInfo(platform, param_name, size, info.data(), NULL))
+        != CL_SUCCESS)
+    {
+        throw std::runtime_error("clGetPlatformInfo failed\n");
+    }
+
+    /* The returned string does not include the null terminator. */
+    return std::string(info.data(), size - 1);
+}
+
+bool is_platform_extension_available(cl_platform_id platform,
+                                     const char *extensionName)
+{
+    std::string extString =
+        get_platform_info_string(platform, CL_PLATFORM_EXTENSIONS);
+    return extString.find(extensionName) != std::string::npos;
+}
+
 void PrintArch(void)
 {
-    vlog("sizeof( void*) = %ld\n", sizeof(void *));
+    vlog("sizeof( void*) = %zu\n", sizeof(void *));
 #if defined(__ppc__)
     vlog("ARCH:\tppc\n");
 #elif defined(__ppc64__)
@@ -1195,6 +1517,10 @@ void PrintArch(void)
     vlog("ARCH:\taarch64\n");
 #elif defined(_WIN32)
     vlog("ARCH:\tWindows\n");
+#elif defined(__mips__)
+    vlog("ARCH:\tmips\n");
+#elif defined(__riscv)
+    vlog("ARCH:\tRISC-V\n");
 #else
 #error unknown arch
 #endif

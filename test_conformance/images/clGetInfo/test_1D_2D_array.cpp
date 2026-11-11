@@ -15,9 +15,15 @@
 //
 #include "../testBase.h"
 
-extern int test_get_image_info_single( cl_context context, image_descriptor *imageInfo, MTdata d, cl_mem_flags flags, size_t row_pitch, size_t slice_pitch );
+extern int test_get_image_info_single(cl_context context,
+                                      image_descriptor *imageInfo, MTdata d,
+                                      cl_mem_flags flags, size_t row_pitch,
+                                      size_t slice_pitch,
+                                      const image_test_context_t &ctx);
 
-int test_get_image_info_1D_array( cl_device_id device, cl_context context, cl_image_format *format, cl_mem_flags flags )
+int test_get_image_info_1D_array(cl_device_id device, cl_context context,
+                                 cl_image_format *format, cl_mem_flags flags,
+                                 const image_test_context_t &ctx)
 {
     size_t maxWidth, maxArraySize;
     cl_ulong maxAllocSize, memSize;
@@ -37,16 +43,22 @@ int test_get_image_info_1D_array( cl_device_id device, cl_context context, cl_im
     imageInfo.type = CL_MEM_OBJECT_IMAGE1D_ARRAY;
 
     int error = clGetDeviceInfo( device, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof( maxWidth ), &maxWidth, NULL );
-    error |= clGetDeviceInfo( device, CL_DEVICE_IMAGE_MAX_ARRAY_SIZE, sizeof( maxArraySize ), &maxArraySize, NULL );
-    error |= clGetDeviceInfo( device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof( maxAllocSize ), &maxAllocSize, NULL );
-    error |= clGetDeviceInfo( device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof( memSize ), &memSize, NULL );
+    error |= clGetDeviceInfo(device, CL_DEVICE_IMAGE_MAX_ARRAY_SIZE,
+                             sizeof(maxArraySize), &maxArraySize, NULL);
     test_error( error, "Unable to get max image 1D array size from device" );
 
-  if (memSize > (cl_ulong)SIZE_MAX) {
-    memSize = (cl_ulong)SIZE_MAX;
-  }
+    /* Reduce the size used by the test by half */
+    maxAllocSize = get_device_info_max_mem_alloc_size(
+        device, MAX_DEVICE_MEMORY_SIZE_DIVISOR);
+    memSize =
+        get_device_info_global_mem_size(device, MAX_DEVICE_MEMORY_SIZE_DIVISOR);
 
-    if( gTestSmallImages )
+    if (memSize > (cl_ulong)SIZE_MAX)
+    {
+        memSize = (cl_ulong)SIZE_MAX;
+    }
+
+    if (ctx.testSmallImages)
     {
         for( imageInfo.width = 1; imageInfo.width < 13; imageInfo.width++ )
         {
@@ -56,19 +68,24 @@ int test_get_image_info_1D_array( cl_device_id device, cl_context context, cl_im
             {
                 for (unsigned int j=0; j < sizeof(all_host_ptr_flags)/sizeof(cl_mem_flags); j++)
                 {
-                    if( gDebugTrace )
+                    if (ctx.debugTrace)
                         log_info( "   at size %d,%d (flags[%u] 0x%x pitch %d)\n", (int)imageInfo.width, (int)imageInfo.arraySize, j, (unsigned int) all_host_ptr_flags[j], (int)imageInfo.rowPitch );
-                    if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], 0, 0 ) )
+                    if (test_get_image_info_single(context, &imageInfo, seed,
+                                                   all_host_ptr_flags[j], 0, 0,
+                                                   ctx))
                         return -1;
                     if (all_host_ptr_flags[j] & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR)) { // skip test when host_ptr is NULL
-                        if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], imageInfo.rowPitch, 0 ) )
+                        if (test_get_image_info_single(
+                                context, &imageInfo, seed,
+                                all_host_ptr_flags[j], imageInfo.rowPitch, 0,
+                                ctx))
                             return -1;
                     }
                 }
             }
         }
     }
-    else if( gTestMaxImages )
+    else if (ctx.testMaxImages)
     {
         // Try a specific set of maximum sizes
         size_t numbeOfSizes;
@@ -87,14 +104,23 @@ int test_get_image_info_1D_array( cl_device_id device, cl_context context, cl_im
             log_info( "Testing %d x %d\n", (int)sizes[ idx ][ 0 ], (int)sizes[ idx ][ 2 ] );
             for (unsigned int j=0; j < sizeof(all_host_ptr_flags)/sizeof(cl_mem_flags); j++)
             {
-              if( gDebugTrace )
-                log_info( "   at max size %d,%d (flags[%u] 0x%x pitch %d)\n", (int)imageInfo.width, (int)imageInfo.arraySize, j, (unsigned int) all_host_ptr_flags[j], (int)imageInfo.rowPitch );
-              if( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], 0, 0 ) )
-                return -1;
-              if (all_host_ptr_flags[j] & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR)) { // skip test when host_ptr is NULL
-                if( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], imageInfo.rowPitch, 0 ) )
-                  return -1;
-              }
+                if (ctx.debugTrace)
+                    log_info("   at max size %d,%d (flags[%u] 0x%x pitch %d)\n",
+                             (int)imageInfo.width, (int)imageInfo.arraySize, j,
+                             (unsigned int)all_host_ptr_flags[j],
+                             (int)imageInfo.rowPitch);
+                if (test_get_image_info_single(context, &imageInfo, seed,
+                                               all_host_ptr_flags[j], 0, 0,
+                                               ctx))
+                    return -1;
+                if (all_host_ptr_flags[j]
+                    & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR))
+                { // skip test when host_ptr is NULL
+                    if (test_get_image_info_single(context, &imageInfo, seed,
+                                                   all_host_ptr_flags[j],
+                                                   imageInfo.rowPitch, 0, ctx))
+                        return -1;
+                }
             }
       }
     }
@@ -122,12 +148,16 @@ int test_get_image_info_1D_array( cl_device_id device, cl_context context, cl_im
 
             for (unsigned int j=0; j < sizeof(all_host_ptr_flags)/sizeof(cl_mem_flags); j++)
             {
-                if( gDebugTrace )
+                if (ctx.debugTrace)
                     log_info( "   at size %d,%d (flags[%u] 0x%x pitch %d) out of %d,%d\n", (int)imageInfo.width, (int)imageInfo.arraySize, j, (unsigned int) all_host_ptr_flags[j], (int)imageInfo.rowPitch, (int)maxWidth, (int)maxArraySize );
-                if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], 0, 0 ) )
+                if (test_get_image_info_single(context, &imageInfo, seed,
+                                               all_host_ptr_flags[j], 0, 0,
+                                               ctx))
                     return -1;
                 if (all_host_ptr_flags[j] & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR)) { // skip test when host_ptr is NULL
-                    if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], imageInfo.rowPitch, 0 ) )
+                    if (test_get_image_info_single(context, &imageInfo, seed,
+                                                   all_host_ptr_flags[j],
+                                                   imageInfo.rowPitch, 0, ctx))
                         return -1;
                 }
             }
@@ -138,7 +168,9 @@ int test_get_image_info_1D_array( cl_device_id device, cl_context context, cl_im
 }
 
 
-int test_get_image_info_2D_array( cl_device_id device, cl_context context, cl_image_format *format, cl_mem_flags flags )
+int test_get_image_info_2D_array(cl_device_id device, cl_context context,
+                                 cl_image_format *format, cl_mem_flags flags,
+                                 const image_test_context_t &ctx)
 {
     size_t maxWidth, maxHeight, maxArraySize;
     cl_ulong maxAllocSize, memSize;
@@ -161,16 +193,22 @@ int test_get_image_info_2D_array( cl_device_id device, cl_context context, cl_im
 
     int error = clGetDeviceInfo( device, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof( maxWidth ), &maxWidth, NULL );
     error |= clGetDeviceInfo( device, CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof( maxHeight ), &maxHeight, NULL );
-    error |= clGetDeviceInfo( device, CL_DEVICE_IMAGE_MAX_ARRAY_SIZE, sizeof( maxArraySize ), &maxArraySize, NULL );
-    error |= clGetDeviceInfo( device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof( maxAllocSize ), &maxAllocSize, NULL );
-    error |= clGetDeviceInfo( device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof( memSize ), &memSize, NULL );
+    error |= clGetDeviceInfo(device, CL_DEVICE_IMAGE_MAX_ARRAY_SIZE,
+                             sizeof(maxArraySize), &maxArraySize, NULL);
     test_error( error, "Unable to get max image 1D array size from device" );
 
-  if (memSize > (cl_ulong)SIZE_MAX) {
-    memSize = (cl_ulong)SIZE_MAX;
-  }
+    /* Reduce the size used by the test by half */
+    maxAllocSize = get_device_info_max_mem_alloc_size(
+        device, MAX_DEVICE_MEMORY_SIZE_DIVISOR);
+    memSize =
+        get_device_info_global_mem_size(device, MAX_DEVICE_MEMORY_SIZE_DIVISOR);
 
-    if( gTestSmallImages )
+    if (memSize > (cl_ulong)SIZE_MAX)
+    {
+        memSize = (cl_ulong)SIZE_MAX;
+    }
+
+    if (ctx.testSmallImages)
     {
         for( imageInfo.width = 1; imageInfo.width < 13; imageInfo.width++ )
         {
@@ -183,12 +221,19 @@ int test_get_image_info_2D_array( cl_device_id device, cl_context context, cl_im
                 {
                     for (unsigned int j=0; j < sizeof(all_host_ptr_flags)/sizeof(cl_mem_flags); j++)
                     {
-                        if( gDebugTrace )
+                        if (ctx.debugTrace)
                             log_info( "   at size %d,%d,%d (flags[%u] 0x%x pitch %d)\n", (int)imageInfo.width, (int)imageInfo.height, (int)imageInfo.arraySize, j, (unsigned int) all_host_ptr_flags[j], (int)imageInfo.rowPitch );
-                        if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], 0, 0 ) )
+                        if (test_get_image_info_single(
+                                context, &imageInfo, seed,
+                                all_host_ptr_flags[j], 0, 0, ctx))
                             return -1;
-                        if (all_host_ptr_flags[j] & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR)) { // skip test when host_ptr is NULL
-                            if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], imageInfo.rowPitch, 0 ) )
+                        if (all_host_ptr_flags[j]
+                            & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR))
+                        { // skip test when host_ptr is NULL
+                            if (test_get_image_info_single(
+                                    context, &imageInfo, seed,
+                                    all_host_ptr_flags[j], imageInfo.rowPitch,
+                                    imageInfo.slicePitch, ctx))
                                 return -1;
                         }
                     }
@@ -196,7 +241,7 @@ int test_get_image_info_2D_array( cl_device_id device, cl_context context, cl_im
             }
         }
     }
-    else if( gTestMaxImages )
+    else if (ctx.testMaxImages)
     {
         // Try a specific set of maximum sizes
         size_t numbeOfSizes;
@@ -215,14 +260,25 @@ int test_get_image_info_2D_array( cl_device_id device, cl_context context, cl_im
             log_info( "Testing %d x %d x %d\n", (int)sizes[ idx ][ 0 ], (int)sizes[ idx ][ 1 ], (int)sizes[ idx ][ 2 ] );
             for (unsigned int j=0; j < sizeof(all_host_ptr_flags)/sizeof(cl_mem_flags); j++)
             {
-              if( gDebugTrace )
-                log_info( "   at max size %d,%d,%d (flags[%u] 0x%x pitch %d)\n", (int)imageInfo.width, (int)imageInfo.height, (int)imageInfo.arraySize, j, (unsigned int) all_host_ptr_flags[j], (int)imageInfo.rowPitch );
-              if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], 0, 0 ) )
-                return -1;
-              if (all_host_ptr_flags[j] & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR)) { // skip test when host_ptr is NULL
-                if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], imageInfo.rowPitch, 0 ) )
-                  return -1;
-              }
+                if (ctx.debugTrace)
+                    log_info(
+                        "   at max size %d,%d,%d (flags[%u] 0x%x pitch %d)\n",
+                        (int)imageInfo.width, (int)imageInfo.height,
+                        (int)imageInfo.arraySize, j,
+                        (unsigned int)all_host_ptr_flags[j],
+                        (int)imageInfo.rowPitch);
+                if (test_get_image_info_single(context, &imageInfo, seed,
+                                               all_host_ptr_flags[j], 0, 0,
+                                               ctx))
+                    return -1;
+                if (all_host_ptr_flags[j]
+                    & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR))
+                { // skip test when host_ptr is NULL
+                    if (test_get_image_info_single(
+                            context, &imageInfo, seed, all_host_ptr_flags[j],
+                            imageInfo.rowPitch, imageInfo.slicePitch, ctx))
+                        return -1;
+                }
             }
         }
     }
@@ -258,12 +314,18 @@ int test_get_image_info_2D_array( cl_device_id device, cl_context context, cl_im
 
             for (unsigned int j=0; j < sizeof(all_host_ptr_flags)/sizeof(cl_mem_flags); j++)
             {
-                if( gDebugTrace )
+                if (ctx.debugTrace)
                     log_info( "   at size %d,%d,%d (flags[%u] 0x%x pitch %d) out of %d,%d,%d\n", (int)imageInfo.width, (int)imageInfo.height, (int)imageInfo.arraySize, j, (unsigned int) all_host_ptr_flags[j], (int)imageInfo.rowPitch, (int)maxWidth, (int)maxHeight, (int)maxArraySize );
-                if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], 0, 0 ) )
+                if (test_get_image_info_single(context, &imageInfo, seed,
+                                               all_host_ptr_flags[j], 0, 0,
+                                               ctx))
                     return -1;
-                if (all_host_ptr_flags[j] & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR)) { // skip test when host_ptr is NULL
-                    if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], imageInfo.rowPitch, 0 ) )
+                if (all_host_ptr_flags[j]
+                    & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR))
+                { // skip test when host_ptr is NULL
+                    if (test_get_image_info_single(
+                            context, &imageInfo, seed, all_host_ptr_flags[j],
+                            imageInfo.rowPitch, imageInfo.slicePitch, ctx))
                         return -1;
                 }
             }

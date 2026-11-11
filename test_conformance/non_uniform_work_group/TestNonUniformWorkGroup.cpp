@@ -261,50 +261,6 @@ TestNonUniformWorkGroup::TestNonUniformWorkGroup(
         return;
     }
 
-    // For OpenCL-3.0 support for non-uniform workgroups is optional, it's still
-    // useful to run these tests since we can verify the behavior of the
-    // get_enqueued_local_size() builtin for uniform workgroups, so we round up
-    // the global size to insure uniform workgroups on those 3.0 devices.
-    // We only need to do this when localSize is non-null, otherwise the driver
-    // will select a value for localSize which will be uniform on devices that
-    // don't support non-uniform work-groups.
-    if (nullptr != localSize && get_device_cl_version(device) >= Version(3, 0))
-    {
-        // Query for the non-uniform work-group support.
-        cl_bool are_non_uniform_sub_groups_supported{ CL_FALSE };
-        auto error =
-            clGetDeviceInfo(device, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT,
-                            sizeof(are_non_uniform_sub_groups_supported),
-                            &are_non_uniform_sub_groups_supported, nullptr);
-        if (error)
-        {
-            print_error(error,
-                        "clGetDeviceInfo failed for "
-                        "CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT");
-            // This signals an error to the caller (see above).
-            _globalSize[0] = 0;
-            return;
-        }
-
-        // If non-uniform work-groups are not supported round up the global
-        // sizes so workgroups are uniform and we have at least one.
-        if (CL_FALSE == are_non_uniform_sub_groups_supported)
-        {
-            log_info(
-                "WARNING: Non-uniform work-groups are not supported on this "
-                "device.\n Running test with uniform work-groups.\n");
-            for (unsigned dim = 0; dim < dims; ++dim)
-            {
-                auto global_size_before = globalSize[dim];
-                auto global_size_rounded = global_size_before
-                    + (localSize[dim] - global_size_before % localSize[dim]);
-                globalSize[dim] = global_size_rounded;
-                log_info("Rounding globalSize[%d] = %d -> %d\n", dim,
-                         global_size_before, global_size_rounded);
-            }
-        }
-    }
-
     cl_uint i;
     _globalWorkOffset_IsNull = true;
     _localSize_IsNull = true;
@@ -448,12 +404,7 @@ void TestNonUniformWorkGroup::verifyData (DataContainerAttrib * reference, DataC
 }
 
 void TestNonUniformWorkGroup::calculateExpectedValues () {
-  size_t nonRemainderGlobalSize[MAX_DIMS];
   size_t numberOfPossibleRegions[MAX_DIMS];
-
-  nonRemainderGlobalSize[0] = _globalSize[0] - (_globalSize[0] % _enqueuedLocalSize[0]);
-  nonRemainderGlobalSize[1] = _globalSize[1] - (_globalSize[1] % _enqueuedLocalSize[1]);
-  nonRemainderGlobalSize[2] = _globalSize[2] - (_globalSize[2] % _enqueuedLocalSize[2]);
 
   numberOfPossibleRegions[0] = (_globalSize[0]>1)?2:1;
   numberOfPossibleRegions[1] = (_globalSize[1]>1)?2:1;
@@ -502,6 +453,11 @@ size_t TestNonUniformWorkGroup::getMaxLocalWorkgroupSize (const cl_device_id &de
   if (TestNonUniformWorkGroup::_maxLocalWorkgroupSize == 0) {
     err = clGetDeviceInfo(device, CL_DEVICE_MAX_WORK_GROUP_SIZE,
       sizeof(TestNonUniformWorkGroup::_maxLocalWorkgroupSize), &TestNonUniformWorkGroup::_maxLocalWorkgroupSize, NULL);
+    if (err)
+    {
+        log_error("clGetDeviceInfo failed\n");
+        return 0;
+    }
   }
 
   return TestNonUniformWorkGroup::_maxLocalWorkgroupSize;
@@ -538,6 +494,50 @@ int TestNonUniformWorkGroup::prepareDevice () {
     }
   }
 
+  // For OpenCL-3.0 support for non-uniform workgroups is optional, it's still
+  // useful to run these tests since we can verify the behavior of the
+  // get_enqueued_local_size() builtin for uniform workgroups, so we round up
+  // the global size to insure uniform workgroups on those 3.0 devices.
+  // We only need to do this when localSize is non-null, otherwise the driver
+  // will select a value for localSize which will be uniform on devices that
+  // don't support non-uniform work-groups.
+  if (get_device_cl_version(_device) >= Version(3, 0))
+  {
+      // Query for the non-uniform work-group support.
+      cl_bool are_non_uniform_sub_groups_supported{ CL_FALSE };
+      auto error =
+          clGetDeviceInfo(_device, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT,
+                          sizeof(are_non_uniform_sub_groups_supported),
+                          &are_non_uniform_sub_groups_supported, nullptr);
+      if (error)
+      {
+          print_error(error,
+                      "clGetDeviceInfo failed for "
+                      "CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT");
+          return -1;
+      }
+
+      // If non-uniform work-groups are not supported round up the global
+      // sizes so workgroups are uniform and we have at least one.
+      if (CL_FALSE == are_non_uniform_sub_groups_supported)
+      {
+          log_info("WARNING: Non-uniform work-groups are not supported on this "
+                   "device.\n Running test with uniform work-groups.\n");
+          for (unsigned dim = 0; dim < _dims; ++dim)
+          {
+              auto global_size_before = _globalSize[dim];
+              auto global_size_rounded = global_size_before
+                  + (_enqueuedLocalSize[dim]
+                     - global_size_before % _enqueuedLocalSize[dim]);
+              _globalSize[dim] = global_size_rounded;
+              log_info("Rounding _globalSize[%d] = %zu -> %zu\n", dim,
+                       global_size_before, global_size_rounded);
+          }
+      }
+  }
+
+  _numOfGlobalWorkItems = _globalSize[0] * _globalSize[1] * _globalSize[2];
+
   if(_localSize_IsNull == false)
     calculateExpectedValues();
 
@@ -557,8 +557,9 @@ int TestNonUniformWorkGroup::prepareDevice () {
   if (_testRange & Range::BARRIERS)
     buildOptions += " -D TESTBARRIERS";
 
-  err = create_single_kernel_helper_with_build_options (_context, &_program, &_testKernel, 1,
-    &KERNEL_FUNCTION, "testKernel", buildOptions.c_str());
+  err = create_single_kernel_helper(_context, &_program, &_testKernel, 1,
+                                    &KERNEL_FUNCTION, "testKernel",
+                                    buildOptions.c_str());
   if (err)
   {
     log_error("Error %d in line: %d of file %s\n", err, __LINE__, __FILE__);
@@ -665,8 +666,8 @@ void TestNonUniformWorkGroup::showTestInfo () {
     if (!_localSize_IsNull) {
       log_info ("\tATTENTION: strict mode applies only NULL local work group size\n");
     } else {
-      log_info ("\t\tExpected value of local work group size is %ld.\n",
-        TestNonUniformWorkGroup::getMaxLocalWorkgroupSize(_device));
+        log_info("\t\tExpected value of local work group size is %zu.\n",
+                 TestNonUniformWorkGroup::getMaxLocalWorkgroupSize(_device));
     }
 
   }
@@ -687,7 +688,8 @@ size_t TestNonUniformWorkGroup::adjustLocalArraySize (size_t localArraySize) {
 
   if (kernelLocalMemSize + localArraySize > deviceLocalMemSize) {
     size_t adjustedLocalArraySize = deviceLocalMemSize - kernelLocalMemSize;
-    log_info("localArraySize was adjusted from %lu to %lu\n", localArraySize, adjustedLocalArraySize);
+    log_info("localArraySize was adjusted from %zu to %zu\n", localArraySize,
+             adjustedLocalArraySize);
     localArraySize = adjustedLocalArraySize;
   }
 
@@ -706,7 +708,8 @@ size_t TestNonUniformWorkGroup::adjustGlobalBufferSize(size_t globalBufferSize) 
   size_t adjustedGlobalBufferSize = globalBufferSize;
   if (deviceMaxAllocObjSize < globalBufferSize) {
     adjustedGlobalBufferSize = deviceMaxAllocObjSize;
-    log_info("globalBufferSize was adjusted from %lu to %lu\n", globalBufferSize, adjustedGlobalBufferSize);
+    log_info("globalBufferSize was adjusted from %zu to %zu\n",
+             globalBufferSize, adjustedGlobalBufferSize);
   }
 
   return adjustedGlobalBufferSize;
@@ -840,8 +843,9 @@ int SubTestExecutor::calculateWorkGroupSize(size_t &maxWgSize, int testRange) {
   if (testRange & Range::BARRIERS)
     buildOptions += " -D TESTBARRIERS";
 
-  err = create_single_kernel_helper_with_build_options (_context, &program, &testKernel, 1,
-    &KERNEL_FUNCTION, "testKernel", buildOptions.c_str());
+  err = create_single_kernel_helper(_context, &program, &testKernel, 1,
+                                    &KERNEL_FUNCTION, "testKernel",
+                                    buildOptions.c_str());
   if (err)
   {
     log_error("Error %d in line: %d of file %s\n", err, __LINE__, __FILE__);

@@ -13,7 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "procs.h"
 #include "subhelpers.h"
 #include "subgroup_common_kernels.h"
 #include "subgroup_common_templates.h"
@@ -38,7 +37,7 @@ template <NonUniformVoteOp operation> struct AA
         int ng = test_params.global_workgroup_size;
         int nw = test_params.local_workgroup_size;
         int ns = test_params.subgroup_size;
-        int nj = (nw + ns - 1) / ns;
+        int nj = div_round_up(nw, ns);
         int e;
         ng = ng / nw;
         ii = 0;
@@ -81,7 +80,7 @@ template <NonUniformVoteOp operation> struct AA
         int ng = test_params.global_workgroup_size;
         int nw = test_params.local_workgroup_size;
         int ns = test_params.subgroup_size;
-        int nj = (nw + ns - 1) / ns;
+        int nj = div_round_up(nw, ns);
         cl_int taa, raa;
         ng = ng / nw;
 
@@ -134,23 +133,6 @@ template <NonUniformVoteOp operation> struct AA
     }
 };
 
-static const char *any_source = "__kernel void test_any(const __global Type "
-                                "*in, __global int4 *xy, __global Type *out)\n"
-                                "{\n"
-                                "    int gid = get_global_id(0);\n"
-                                "    XY(xy,gid);\n"
-                                "    out[gid] = sub_group_any(in[gid]);\n"
-                                "}\n";
-
-static const char *all_source = "__kernel void test_all(const __global Type "
-                                "*in, __global int4 *xy, __global Type *out)\n"
-                                "{\n"
-                                "    int gid = get_global_id(0);\n"
-                                "    XY(xy,gid);\n"
-                                "    out[gid] = sub_group_all(in[gid]);\n"
-                                "}\n";
-
-
 template <typename T>
 int run_broadcast_scan_reduction_for_type(RunTestForType rft)
 {
@@ -186,6 +168,7 @@ int test_subgroup_functions(cl_device_id device, cl_context context,
     constexpr size_t global_work_size = 2000;
     constexpr size_t local_work_size = 200;
     WorkGroupParams test_params(global_work_size, local_work_size);
+    test_params.use_core_subgroups = useCoreSubgroups;
     test_params.save_kernel_source(sub_group_reduction_scan_source);
     test_params.save_kernel_source(sub_group_generic_source,
                                    "sub_group_broadcast");
@@ -204,14 +187,12 @@ int test_subgroup_functions(cl_device_id device, cl_context context,
     return error;
 }
 
-int test_subgroup_functions_core(cl_device_id device, cl_context context,
-                                 cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(subgroup_functions_core, Version(2, 1))
 {
     return test_subgroup_functions(device, context, queue, num_elements, true);
 }
 
-int test_subgroup_functions_ext(cl_device_id device, cl_context context,
-                                cl_command_queue queue, int num_elements)
+REGISTER_TEST_VERSION(subgroup_functions_ext, Version(2, 0))
 {
     bool hasExtension = is_extension_available(device, "cl_khr_subgroups");
 

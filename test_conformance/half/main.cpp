@@ -1,6 +1,6 @@
 //
 // Copyright (c) 2017 The Khronos Group Inc.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -36,40 +36,19 @@
 #include "cl_utils.h"
 #include "tests.h"
 
-const char **   argList = NULL;
-size_t          argCount = 0;
-char            appName[64] = "ctest";
 const char *addressSpaceNames[AS_NumAddressSpaces] = {"global", "private", "local", "constant"};
 
 #pragma mark -
 #pragma mark Declarations
 
 
-static int ParseArgs( int argc, const char **argv );
-static void PrintUsage( void );
-
+static test_status ParseArgs(int &argc, const char *argv[],
+                             std::vector<std::string> &removed_args,
+                             std::string &help);
 
 int g_arrVecSizes[kVectorSizeCount+kStrangeVectorSizeCount];
 int g_arrVecAligns[kLargestVectorSize+1];
 static int arrStrangeVecSizes[kStrangeVectorSizeCount] = {3};
-
-test_definition test_list[] = {
-    ADD_TEST( vload_half ),
-    ADD_TEST( vloada_half ),
-    ADD_TEST( vstore_half ),
-    ADD_TEST( vstorea_half ),
-    ADD_TEST( vstore_half_rte ),
-    ADD_TEST( vstorea_half_rte ),
-    ADD_TEST( vstore_half_rtz ),
-    ADD_TEST( vstorea_half_rtz ),
-    ADD_TEST( vstore_half_rtp ),
-    ADD_TEST( vstorea_half_rtp ),
-    ADD_TEST( vstore_half_rtn ),
-    ADD_TEST( vstorea_half_rtn ),
-    ADD_TEST( roundTrip ),
-};
-
-const int test_num = ARRAY_SIZE( test_list );
 
 int main (int argc, const char **argv )
 {
@@ -92,26 +71,11 @@ int main (int argc, const char **argv )
         g_arrVecAligns[i] = alignbound;
     }
 
-    argc = parseCustomParam(argc, argv);
-    if (argc == -1)
-    {
-        return -1;
-    }
-
-    if( (error = ParseArgs( argc, argv )) )
-        goto exit;
-
-    if (gIsEmbedded) {
-        vlog( "\tProfile: Embedded\n" );
-    }else
-    {
-        vlog( "\tProfile: Full\n" );
-    }
-
     fflush( stdout );
-    error = runTestHarnessWithCheck( argCount, argList, test_num, test_list, true, 0, InitCL );
+    error = runTestHarnessWithCheckAndParse(
+        argc, argv, test_registry::getInstance().num_tests(),
+        test_registry::getInstance().definitions(), true, 0, InitCL, ParseArgs);
 
-exit:
     if(gQueue)
     {
         int flush_error = clFinish(gQueue);
@@ -128,48 +92,23 @@ exit:
 #pragma mark -
 #pragma mark setup
 
-static int ParseArgs( int argc, const char **argv )
+static test_status ParseArgs(int &argc, const char *argv[],
+                             std::vector<std::string> &removed_args,
+                             std::string &help)
 {
-    int i;
-    argList = (const char **)calloc( argc - 1, sizeof( char*) );
 
-    if( NULL == argList )
-    {
-        vlog_error( "Failed to allocate memory for argList.\n" );
-        return 1;
-    }
+    help =
+        R"(        -d     Toggle double precision testing (default: on if double supported)
+        -t     Toggle reporting performance data.
+        -r     Reset buffers on host instead of on device.
+        -a     Test 2^32 values, not just special & random values. (default: off)
+        -[2^n] Set wimpy reduction factor, recommended range of n is 1-12, default factor()"
+        + std::to_string(gWimpyReductionFactor) + ")\n";
 
-    argList[0] = argv[0];
-    argCount = 1;
+    std::vector<const char *> argList;
+    argList.push_back(argv[0]);
 
-#if (defined( __APPLE__ ) || defined(__linux__) || defined(__MINGW32__))
-    { // Extract the app name
-        char baseName[ MAXPATHLEN ];
-        strncpy( baseName, argv[0], MAXPATHLEN );
-        char *base = basename( baseName );
-        if( NULL != base )
-        {
-            strncpy( appName, base, sizeof( appName )  );
-            appName[ sizeof( appName ) -1 ] = '\0';
-        }
-    }
-#elif defined (_WIN32)
-    {
-        char fname[_MAX_FNAME + _MAX_EXT + 1];
-        char ext[_MAX_EXT];
-
-        errno_t err = _splitpath_s( argv[0], NULL, 0, NULL, 0,
-                                   fname, _MAX_FNAME, ext, _MAX_EXT );
-        if (err == 0) { // no error
-            strcat (fname, ext); //just cat them, size of frame can keep both
-            strncpy (appName, fname, sizeof(appName));
-            appName[ sizeof( appName ) -1 ] = '\0';
-        }
-    }
-#endif
-
-    vlog( "\n%s", appName );
-    for( i = 1; i < argc; i++ )
+    for (int i = 1; i < argc; i++)
     {
         const char *arg = argv[i];
         if( NULL == arg )
@@ -183,46 +122,36 @@ static int ParseArgs( int argc, const char **argv )
             {
                 switch( *arg )
                 {
+                    case 'a': gTestAll ^= 1; break;
+
                     case 'd':
                         gTestDouble ^= 1;
                         break;
-
-                    case 'h':
-                        PrintUsage();
-                        return -1;
 
                     case 't':
                         gReportTimes ^= 1;
                         break;
 
-                    case 'w':  // Wimpy mode
-                        gWimpyMode = true;
-                        break;
+                    case 'r': gHostReset = true; break;
+
                     case '[':
                         parseWimpyReductionFactor( arg, gWimpyReductionFactor);
                         break;
                     default:
                         vlog_error( " <-- unknown flag: %c (0x%2.2x)\n)", *arg, *arg );
-                        PrintUsage();
-                        return -1;
+                        return TEST_FAIL;
                 }
                 arg++;
             }
+            removed_args.push_back(argv[i]);
         }
         else
         {
-            argList[ argCount ] = arg;
-            argCount++;
+            argList.push_back(argv[i]);
         }
     }
+    update_argc_argv_from_args_list(argList, argc, argv);
 
-    if (getenv("CL_WIMPY_MODE")) {
-      vlog( "\n" );
-      vlog( "*** Detected CL_WIMPY_MODE env                          ***\n" );
-      gWimpyMode = 1;
-    }
-
-    vlog( "Test binary built %s %s\n", __DATE__, __TIME__ );
     PrintArch();
     if( gWimpyMode )
     {
@@ -232,20 +161,15 @@ static int ParseArgs( int argc, const char **argv )
         vlog( "*** It gives warm fuzzy feelings and then nevers calls. ***\n\n" );
         vlog( "*** Wimpy Reduction Factor: %-27u ***\n\n", gWimpyReductionFactor);
     }
-    return 0;
-}
 
-static void PrintUsage( void )
-{
-    vlog( "%s [-dthw]: <optional: test names>\n", appName );
-    vlog( "\t\t-d\tToggle double precision testing (default: on if double supported)\n" );
-    vlog( "\t\t-t\tToggle reporting performance data.\n" );
-    vlog( "\t\t-w\tRun in wimpy mode\n" );
-    vlog( "\t\t-[2^n]\tSet wimpy reduction factor, recommended range of n is 1-12, default factor(%u)\n", gWimpyReductionFactor);
-    vlog( "\t\t-h\tHelp\n" );
-    for( int i = 0; i < test_num; i++ )
+    if (gIsEmbedded)
     {
-        vlog("\t\t%s\n", test_list[i].name );
+        vlog("\tProfile: Embedded\n");
     }
-}
+    else
+    {
+        vlog("\tProfile: Full\n");
+    }
 
+    return TEST_PASS;
+}

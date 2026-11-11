@@ -19,8 +19,9 @@
 #include <string>
 #include <vector>
 
-#include "procs.h"
-#include "harness/testHarness.h"
+#include "testBase.h"
+
+static std::string pragma_extension;
 
 template <int N> struct TestInfo
 {
@@ -514,8 +515,7 @@ static void makeReference(std::vector<T>& ref)
     // single channel lvalue
     for (size_t i = 0; i < N; i++)
     {
-        ref[dstIndex * S + i] = 0;
-        ++dstIndex;
+        ref[dstIndex++ * S + i] = 0;
     }
 
     // normal lvalue
@@ -605,13 +605,10 @@ template <typename T, size_t N>
 static int test_vectype(const char* type_name, cl_device_id device,
                         cl_context context, cl_command_queue queue)
 {
-    log_info("    testing type %s%d\n", type_name, N);
+    log_info("    testing type %s%zu\n", type_name, N);
 
     cl_int error = CL_SUCCESS;
     int result = TEST_PASS;
-
-    clProgramWrapper program;
-    clKernelWrapper kernel;
 
     std::string buildOptions{ "-DTYPE=" };
     buildOptions += type_name;
@@ -628,35 +625,56 @@ static int test_vectype(const char* type_name, cl_device_id device,
     makeReference<T, N, S>(reference);
 
     // XYZW swizzles:
-
-    const char* xyzw_source = TestInfo<N>::kernel_source_xyzw;
-    error = create_single_kernel_helper(
-        context, &program, &kernel, 1, &xyzw_source, "test_vector_swizzle_xyzw",
-        buildOptions.c_str());
-    test_error(error, "Unable to create xyzw test kernel");
-
-    result |= test_vectype_case(value, reference, context, kernel, queue);
-
-    // sN swizzles:
-    const char* sN_source = TestInfo<N>::kernel_source_sN;
-    error = create_single_kernel_helper(context, &program, &kernel, 1,
-                                        &sN_source, "test_vector_swizzle_sN",
-                                        buildOptions.c_str());
-    test_error(error, "Unable to create sN test kernel");
-
-    result |= test_vectype_case(value, reference, context, kernel, queue);
-
-    // RGBA swizzles for OpenCL 3.0 and newer:
-    const Version device_version = get_device_cl_version(device);
-    if (device_version >= Version(3, 0))
     {
-        const char* rgba_source = TestInfo<N>::kernel_source_rgba;
+        clProgramWrapper program;
+        clKernelWrapper kernel;
+
+        std::string program_src =
+            pragma_extension + std::string(TestInfo<N>::kernel_source_xyzw);
+        const char* xyzw_source = program_src.c_str();
         error = create_single_kernel_helper(
-            context, &program, &kernel, 1, &rgba_source,
-            "test_vector_swizzle_rgba", buildOptions.c_str());
-        test_error(error, "Unable to create rgba test kernel");
+            context, &program, &kernel, 1, &xyzw_source,
+            "test_vector_swizzle_xyzw", buildOptions.c_str());
+        test_error(error, "Unable to create xyzw test kernel");
 
         result |= test_vectype_case(value, reference, context, kernel, queue);
+    }
+
+    // sN swizzles:
+    {
+        clProgramWrapper program;
+        clKernelWrapper kernel;
+
+        std::string program_src =
+            pragma_extension + std::string(TestInfo<N>::kernel_source_sN);
+        const char* sN_source = program_src.c_str();
+        error = create_single_kernel_helper(
+            context, &program, &kernel, 1, &sN_source, "test_vector_swizzle_sN",
+            buildOptions.c_str());
+        test_error(error, "Unable to create sN test kernel");
+
+        result |= test_vectype_case(value, reference, context, kernel, queue);
+    }
+
+    // RGBA swizzles for OpenCL 3.0 and newer:
+    {
+        clProgramWrapper program;
+        clKernelWrapper kernel;
+
+        const Version device_version = get_device_cl_version(device);
+        if (device_version >= Version(3, 0))
+        {
+            std::string program_src =
+                pragma_extension + std::string(TestInfo<N>::kernel_source_rgba);
+            const char* rgba_source = program_src.c_str();
+            error = create_single_kernel_helper(
+                context, &program, &kernel, 1, &rgba_source,
+                "test_vector_swizzle_rgba", buildOptions.c_str());
+            test_error(error, "Unable to create rgba test kernel");
+
+            result |=
+                test_vectype_case(value, reference, context, kernel, queue);
+        }
     }
 
     return result;
@@ -673,10 +691,10 @@ static int test_type(const char* type_name, cl_device_id device,
         | test_vectype<T, 16>(type_name, device, context, queue);
 }
 
-int test_vector_swizzle(cl_device_id device, cl_context context,
-                        cl_command_queue queue, int num_elements)
+REGISTER_TEST(vector_swizzle)
 {
     int hasDouble = is_extension_available(device, "cl_khr_fp64");
+    int hasHalf = is_extension_available(device, "cl_khr_fp16");
 
     int result = TEST_PASS;
     result |= test_type<cl_char>("char", device, context, queue);
@@ -691,8 +709,14 @@ int test_vector_swizzle(cl_device_id device, cl_context context,
         result |= test_type<cl_ulong>("ulong", device, context, queue);
     }
     result |= test_type<cl_float>("float", device, context, queue);
+    if (hasHalf)
+    {
+        pragma_extension = "#pragma OPENCL EXTENSION cl_khr_fp16 : enable\n";
+        result |= test_type<cl_half>("half", device, context, queue);
+    }
     if (hasDouble)
     {
+        pragma_extension = "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n";
         result |= test_type<cl_double>("double", device, context, queue);
     }
     return result;

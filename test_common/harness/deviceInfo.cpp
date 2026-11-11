@@ -50,7 +50,7 @@ std::string get_device_info_string(cl_device_id device,
 }
 
 /* Determines if an extension is supported by a device. */
-int is_extension_available(cl_device_id device, const char *extensionName)
+bool is_extension_available(cl_device_id device, const char *extensionName)
 {
     std::string extString = get_device_extensions_string(device);
     std::istringstream ss(extString);
@@ -85,7 +85,7 @@ cl_version get_extension_version(cl_device_id device, const char *extensionName)
                                  "VERSION) failed to return value\n");
     }
 
-    for (auto &ext : extensions)
+    for (const auto &ext : extensions)
     {
         if (!strcmp(extensionName, ext.name))
         {
@@ -101,6 +101,20 @@ cl_version get_extension_version(cl_device_id device, const char *extensionName)
 std::string get_device_extensions_string(cl_device_id device)
 {
     return get_device_info_string(device, CL_DEVICE_EXTENSIONS);
+}
+
+/* Determines if an IL is supported by a device. */
+bool is_il_available(cl_device_id device, const char *ilNameVersion)
+{
+    std::string ilString = get_device_il_version_string(device);
+    std::istringstream ss(ilString);
+    while (ss)
+    {
+        std::string found;
+        ss >> found;
+        if (found == ilNameVersion) return true;
+    }
+    return false;
 }
 
 /* Returns a string containing the supported IL version(s) for a device. */
@@ -131,4 +145,43 @@ size_t get_max_param_size(cl_device_id device)
         throw std::runtime_error("clGetDeviceInfo failed\n");
     }
     return ret;
+}
+
+static cl_ulong get_device_info_max_size(cl_device_id device,
+                                         cl_device_info info,
+                                         unsigned int divisor)
+{
+    cl_ulong max_size;
+
+    if (divisor == 0)
+    {
+        throw std::runtime_error("Allocation divisor should not be 0\n");
+    }
+
+    if (clGetDeviceInfo(device, info, sizeof(max_size), &max_size, NULL)
+        != CL_SUCCESS)
+    {
+        throw std::runtime_error("clGetDeviceInfo failed\n");
+    }
+    return max_size / divisor;
+}
+
+cl_ulong get_device_info_max_mem_alloc_size(cl_device_id device,
+                                            unsigned int divisor)
+{
+    return get_device_info_max_size(device, CL_DEVICE_MAX_MEM_ALLOC_SIZE,
+                                    divisor);
+}
+
+cl_ulong get_device_info_global_mem_size(cl_device_id device,
+                                         unsigned int divisor)
+{
+    return get_device_info_max_size(device, CL_DEVICE_GLOBAL_MEM_SIZE, divisor);
+}
+
+cl_ulong get_device_info_max_constant_buffer_size(cl_device_id device,
+                                                  unsigned int divisor)
+{
+    return get_device_info_max_size(device, CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE,
+                                    divisor);
 }

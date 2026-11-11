@@ -15,10 +15,14 @@
 //
 #include "../testBase.h"
 
-int test_get_image_info_single( cl_context context, image_descriptor *imageInfo, MTdata d, cl_mem_flags flags, size_t row_pitch, size_t slice_pitch )
+int test_get_image_info_single(cl_context context, image_descriptor *imageInfo,
+                               MTdata d, cl_mem_flags flags, size_t row_pitch,
+                               size_t slice_pitch,
+                               const image_test_context_t &ctx)
 {
     int error;
     clMemWrapper image;
+    clMemWrapper buffer;
     cl_image_desc imageDesc;
     void *host_ptr = NULL;
 
@@ -47,27 +51,45 @@ int test_get_image_info_single( cl_context context, image_descriptor *imageInfo,
     switch (imageInfo->type)
     {
         case CL_MEM_OBJECT_IMAGE1D:
-            if ( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( " - Creating 1D image %d with flags=0x%lx row_pitch=%d slice_pitch=%d host_ptr=%p...\n", (int)imageInfo->width, (unsigned long)flags, (int)row_pitch, (int)slice_pitch, host_ptr );
             break;
         case CL_MEM_OBJECT_IMAGE2D:
-            if ( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( " - Creating 2D image %d by %d with flags=0x%lx row_pitch=%d slice_pitch=%d host_ptr=%p...\n", (int)imageInfo->width, (int)imageInfo->height, (unsigned long)flags, (int)row_pitch, (int)slice_pitch, host_ptr );
             break;
         case CL_MEM_OBJECT_IMAGE3D:
             imageInfo->slicePitch = imageInfo->rowPitch * imageInfo->height;
-            if ( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( " - Creating 3D image %d by %d by %d with flags=0x%lx row_pitch=%d slice_pitch=%d host_ptr=%p...\n", (int)imageInfo->width, (int)imageInfo->height, (int)imageInfo->depth, (unsigned long)flags, (int)row_pitch, (int)slice_pitch, host_ptr );
             break;
         case CL_MEM_OBJECT_IMAGE1D_ARRAY:
             imageInfo->slicePitch = imageInfo->rowPitch;
-            if ( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( " - Creating 1D image array %d by %d with flags=0x%lx row_pitch=%d slice_pitch=%d host_ptr=%p...\n", (int)imageInfo->width, (int)imageInfo->arraySize, (unsigned long)flags, (int)row_pitch, (int)slice_pitch, host_ptr );
             break;
         case CL_MEM_OBJECT_IMAGE2D_ARRAY:
             imageInfo->slicePitch = imageInfo->rowPitch * imageInfo->height;
-            if ( gDebugTrace )
+            if (ctx.debugTrace)
                 log_info( " - Creating 2D image array %d by %d by %d with flags=0x%lx row_pitch=%d slice_pitch=%d host_ptr=%p...\n", (int)imageInfo->width, (int)imageInfo->height, (int)imageInfo->arraySize, (unsigned long)flags, (int)row_pitch, (int)slice_pitch, host_ptr );
+            break;
+        case CL_MEM_OBJECT_IMAGE1D_BUFFER:
+            if (ctx.debugTrace)
+                log_info(" - Creating 1D buffer image %d with flags=0x%lx "
+                         "row_pitch=%d slice_pitch=%d host_ptr=%p...\n",
+                         (int)imageInfo->width, (unsigned long)flags,
+                         (int)row_pitch, (int)slice_pitch, host_ptr);
+            int err;
+            buffer = clCreateBuffer(context, flags, imageInfo->rowPitch,
+                                    host_ptr, &err);
+            if (err != CL_SUCCESS)
+            {
+                log_error("ERROR: Unable to create buffer for 1D image buffer "
+                          "of size %d (%s)",
+                          (int)imageInfo->rowPitch, IGetErrorString(err));
+                return -1;
+            }
+            imageDesc.buffer = imageInfo->buffer = buffer;
             break;
     }
 
@@ -88,9 +110,13 @@ int test_get_image_info_single( cl_context context, image_descriptor *imageInfo,
             case CL_MEM_OBJECT_IMAGE1D_ARRAY:
                 log_error( "ERROR: Unable to create 1D image array of size %d x %d (%s)", (int)imageInfo->width, (int)imageInfo->arraySize, IGetErrorString( error ) );
                 break;
-                break;
             case CL_MEM_OBJECT_IMAGE2D_ARRAY:
                 log_error( "ERROR: Unable to create 2D image array of size %d x %d x %d (%s)", (int)imageInfo->width, (int)imageInfo->height, (int)imageInfo->arraySize, IGetErrorString( error ) );
+                break;
+            case CL_MEM_OBJECT_IMAGE1D_BUFFER:
+                log_error(
+                    "ERROR: Unable to create 1D image buffer of size %d (%s)",
+                    (int)imageInfo->width, IGetErrorString(error));
                 break;
         }
         return -1;
@@ -124,13 +150,55 @@ int test_get_image_info_single( cl_context context, image_descriptor *imageInfo,
     error = clGetImageInfo( image, CL_IMAGE_ROW_PITCH, sizeof( outRowPitch ), &outRowPitch, NULL );
     test_error( error, "Unable to get image info (row pitch)" );
 
-  size_t outSlicePitch;
-  error = clGetImageInfo( image, CL_IMAGE_SLICE_PITCH, sizeof( outSlicePitch ), &outSlicePitch, NULL );
-  test_error( error, "Unable to get image info (slice pitch)" );
-    if( imageInfo->type == CL_MEM_OBJECT_IMAGE1D && outSlicePitch != 0 )
+    size_t outSlicePitch;
+    error = clGetImageInfo(image, CL_IMAGE_SLICE_PITCH, sizeof(outSlicePitch),
+                           &outSlicePitch, NULL);
+    test_error(error, "Unable to get image info (slice pitch)");
+
+    const size_t calc_row =
+        imageInfo->width * get_pixel_size(imageInfo->format);
+    const bool use_host = (flags & CL_MEM_USE_HOST_PTR) != 0;
+    const bool copy_host = (flags & CL_MEM_COPY_HOST_PTR) != 0;
+    const bool has_host_ptr = use_host || copy_host;
+
+    // row_pitch/slice_pitch can be non-zero only when a host_ptr is provided,
+    // with host_ptr == NULL it must be 0
+    const size_t expected_row =
+        (has_host_ptr && row_pitch != 0) ? row_pitch : calc_row;
+
+    // Expected slice pitch for image type:
+    // USE_HOST_PTR + custom slice_pitch: must match what user passes
+    // USE_HOST_PTR + slice_pitch==0: driver computes as expected_row *
+    size_t calc_slice = 0;
+    switch (imageInfo->type)
     {
-        log_error( "ERROR: slice pitch returned is invalid! (expected %d, got %d)\n",
-              (int)0, (int)outSlicePitch );
+        case CL_MEM_OBJECT_IMAGE3D:
+        case CL_MEM_OBJECT_IMAGE2D_ARRAY:
+            calc_slice = expected_row * imageInfo->height;
+            break;
+        case CL_MEM_OBJECT_IMAGE1D_ARRAY: calc_slice = expected_row; break;
+        default: break;
+    }
+
+    const size_t expected_slice =
+        (has_host_ptr && slice_pitch != 0) ? slice_pitch : calc_slice;
+
+    if (imageInfo->type != CL_MEM_OBJECT_IMAGE1D_BUFFER
+        && outRowPitch != expected_row)
+    {
+        log_error("ERROR: CL_IMAGE_ROW_PITCH mismatch for image type %s "
+                  "(flags=0x%lx row_pitch=%zu): expected %zu, got %zu\n",
+                  GetImageTypeName(imageInfo->type), (unsigned long)flags,
+                  row_pitch, expected_row, outRowPitch);
+        return 1;
+    }
+
+    if (outSlicePitch != expected_slice)
+    {
+        log_error("ERROR: CL_IMAGE_SLICE_PITCH mismatch for image type %s "
+                  "(flags=0x%lx slice_pitch=%zu): expected %zu, got %zu\n",
+                  GetImageTypeName(imageInfo->type), (unsigned long)flags,
+                  slice_pitch, expected_slice, outSlicePitch);
         return 1;
     }
 
@@ -148,6 +216,7 @@ int test_get_image_info_single( cl_context context, image_descriptor *imageInfo,
   switch (imageInfo->type)
   {
     case CL_MEM_OBJECT_IMAGE1D:
+    case CL_MEM_OBJECT_IMAGE1D_BUFFER:
     case CL_MEM_OBJECT_IMAGE1D_ARRAY:
       required_height = 0;
       break;
@@ -156,6 +225,10 @@ int test_get_image_info_single( cl_context context, image_descriptor *imageInfo,
     case CL_MEM_OBJECT_IMAGE3D:
       required_height = imageInfo->height;
       break;
+    default:
+        log_error("ERROR: Invalid imageInfo->type = %d\n", imageInfo->type);
+        required_height = 0;
+        break;
   }
 
     size_t outHeight;
@@ -175,11 +248,14 @@ int test_get_image_info_single( cl_context context, image_descriptor *imageInfo,
     case CL_MEM_OBJECT_IMAGE2D:
     case CL_MEM_OBJECT_IMAGE1D_ARRAY:
     case CL_MEM_OBJECT_IMAGE2D_ARRAY:
-      required_depth = 0;
-      break;
+    case CL_MEM_OBJECT_IMAGE1D_BUFFER: required_depth = 0; break;
     case CL_MEM_OBJECT_IMAGE3D:
       required_depth = imageInfo->depth;
       break;
+    default:
+        log_error("ERROR: Invalid imageInfo->type = %d\n", imageInfo->type);
+        required_depth = 0;
+        break;
   }
 
   size_t outDepth;
@@ -198,12 +274,15 @@ int test_get_image_info_single( cl_context context, image_descriptor *imageInfo,
     case CL_MEM_OBJECT_IMAGE1D:
     case CL_MEM_OBJECT_IMAGE2D:
     case CL_MEM_OBJECT_IMAGE3D:
-      required_array_size = 0;
-      break;
+    case CL_MEM_OBJECT_IMAGE1D_BUFFER: required_array_size = 0; break;
     case CL_MEM_OBJECT_IMAGE1D_ARRAY:
     case CL_MEM_OBJECT_IMAGE2D_ARRAY:
       required_array_size = imageInfo->arraySize;
       break;
+    default:
+        log_error("ERROR: Invalid imageInfo->type = %d\n", imageInfo->type);
+        required_array_size = 0;
+        break;
   }
 
   size_t outArraySize;
@@ -256,7 +335,9 @@ int test_get_image_info_single( cl_context context, image_descriptor *imageInfo,
     return 0;
 }
 
-int test_get_image_info_2D( cl_device_id device, cl_context context, cl_image_format *format, cl_mem_flags flags )
+int test_get_image_info_2D(cl_device_id device, cl_context context,
+                           cl_image_format *format, cl_mem_flags flags,
+                           const image_test_context_t &ctx)
 {
     size_t maxWidth, maxHeight;
     cl_ulong maxAllocSize, memSize;
@@ -278,16 +359,22 @@ int test_get_image_info_2D( cl_device_id device, cl_context context, cl_image_fo
     pixelSize = get_pixel_size( imageInfo.format );
 
     int error = clGetDeviceInfo( device, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof( maxWidth ), &maxWidth, NULL );
-    error |= clGetDeviceInfo( device, CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof( maxHeight ), &maxHeight, NULL );
-    error |= clGetDeviceInfo( device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof( maxAllocSize ), &maxAllocSize, NULL );
-    error |= clGetDeviceInfo( device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof( memSize ), &memSize, NULL );
+    error |= clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_HEIGHT,
+                             sizeof(maxHeight), &maxHeight, NULL);
     test_error( error, "Unable to get max image 2D width or max image 3D height or max memory allocation size or global memory size from device" );
 
-  if (memSize > (cl_ulong)SIZE_MAX) {
-    memSize = (cl_ulong)SIZE_MAX;
-  }
+    /* Reduce the size used by the test by half */
+    maxAllocSize = get_device_info_max_mem_alloc_size(
+        device, MAX_DEVICE_MEMORY_SIZE_DIVISOR);
+    memSize =
+        get_device_info_global_mem_size(device, MAX_DEVICE_MEMORY_SIZE_DIVISOR);
 
-    if( gTestSmallImages )
+    if (memSize > (cl_ulong)SIZE_MAX)
+    {
+        memSize = (cl_ulong)SIZE_MAX;
+    }
+
+    if (ctx.testSmallImages)
     {
         for( imageInfo.width = 1; imageInfo.width < 13; imageInfo.width++ )
         {
@@ -296,19 +383,24 @@ int test_get_image_info_2D( cl_device_id device, cl_context context, cl_image_fo
             {
                 for (unsigned int j=0; j < sizeof(all_host_ptr_flags)/sizeof(cl_mem_flags); j++)
                 {
-                    if( gDebugTrace )
+                    if (ctx.debugTrace)
                         log_info( "   at size %d,%d (flags[%u] 0x%x pitch %d)\n", (int)imageInfo.width, (int)imageInfo.height, j, (unsigned int) all_host_ptr_flags[j], (int)imageInfo.rowPitch );
-                    if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], 0, 0 ) )
+                    if (test_get_image_info_single(context, &imageInfo, seed,
+                                                   all_host_ptr_flags[j], 0, 0,
+                                                   ctx))
                         return -1;
                     if (all_host_ptr_flags[j] & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR)) { // skip test when host_ptr is NULL
-                        if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], imageInfo.rowPitch, 0 ) )
+                        if (test_get_image_info_single(
+                                context, &imageInfo, seed,
+                                all_host_ptr_flags[j], imageInfo.rowPitch, 0,
+                                ctx))
                             return -1;
                     }
                 }
             }
         }
     }
-    else if( gTestMaxImages )
+    else if (ctx.testMaxImages)
     {
         // Try a specific set of maximum sizes
         size_t numbeOfSizes;
@@ -324,12 +416,16 @@ int test_get_image_info_2D( cl_device_id device, cl_context context, cl_image_fo
             log_info( "Testing %d x %d\n", (int)sizes[ idx ][ 0 ], (int)sizes[ idx ][ 1 ] );
             for (unsigned int j=0; j < sizeof(all_host_ptr_flags)/sizeof(cl_mem_flags); j++)
             {
-                if( gDebugTrace )
+                if (ctx.debugTrace)
                     log_info( "   at max size %d,%d (flags[%u] 0x%x pitch %d)\n", (int)imageInfo.width, (int)imageInfo.height, j, (unsigned int) all_host_ptr_flags[j], (int)imageInfo.rowPitch );
-                if( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], 0, 0 ) )
+                if (test_get_image_info_single(context, &imageInfo, seed,
+                                               all_host_ptr_flags[j], 0, 0,
+                                               ctx))
                     return -1;
                 if (all_host_ptr_flags[j] & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR)) { // skip test when host_ptr is NULL
-                    if( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], imageInfo.rowPitch, 0 ) )
+                    if (test_get_image_info_single(context, &imageInfo, seed,
+                                                   all_host_ptr_flags[j],
+                                                   imageInfo.rowPitch, 0, ctx))
                         return -1;
         }
             }
@@ -361,12 +457,16 @@ int test_get_image_info_2D( cl_device_id device, cl_context context, cl_image_fo
 
             for (unsigned int j=0; j < sizeof(all_host_ptr_flags)/sizeof(cl_mem_flags); j++)
             {
-                if( gDebugTrace )
+                if (ctx.debugTrace)
                     log_info( "   at size %d,%d (flags[%u] 0x%x pitch %d) out of %d,%d\n", (int)imageInfo.width, (int)imageInfo.height, j, (unsigned int) all_host_ptr_flags[j], (int)imageInfo.rowPitch, (int)maxWidth, (int)maxHeight );
-                if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], 0, 0 ) )
+                if (test_get_image_info_single(context, &imageInfo, seed,
+                                               all_host_ptr_flags[j], 0, 0,
+                                               ctx))
                     return -1;
                 if (all_host_ptr_flags[j] & (CL_MEM_COPY_HOST_PTR | CL_MEM_USE_HOST_PTR)) { // skip test when host_ptr is NULL
-                    if ( test_get_image_info_single( context, &imageInfo, seed, all_host_ptr_flags[j], imageInfo.rowPitch, 0 ) )
+                    if (test_get_image_info_single(context, &imageInfo, seed,
+                                                   all_host_ptr_flags[j],
+                                                   imageInfo.rowPitch, 0, ctx))
                         return -1;
                 }
             }

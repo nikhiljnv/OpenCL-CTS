@@ -21,8 +21,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-
-#include "procs.h"
+#include "testBase.h"
 
 static const char *multireadimage_kernel_code =
 "__kernel void test_multireadimage(int n, int m, sampler_t sampler, \n"
@@ -93,7 +92,7 @@ verify_multireadimage(void *image[], int num_images, float *outptr, int w, int h
 }
 
 
-int test_mri_one(cl_device_id device, cl_context context, cl_command_queue queue, int num_elements)
+REGISTER_TEST(mri_one)
 {
     cl_mem streams[8];
     cl_image_format    img_format;
@@ -101,8 +100,8 @@ int test_mri_one(cl_device_id device, cl_context context, cl_command_queue queue
     cl_program program;
     cl_kernel kernel;
     size_t threads[2];
-    int img_width = 512;
-    int img_height = 512;
+    size_t img_width = 512;
+    size_t img_height = 512;
     int i, err;
     size_t origin[3] = {0, 0, 0};
     size_t region[3] = {img_width, img_height, 1};
@@ -153,14 +152,14 @@ int test_mri_one(cl_device_id device, cl_context context, cl_command_queue queue
   err  = clSetKernelArg(kernel, 0, sizeof i, &i);
   err |= clSetKernelArg(kernel, 1, sizeof err, &err);
   err |= clSetKernelArg(kernel, 2, sizeof sampler, &sampler);
-  for (i=0; i<8; i++)
-    err |= clSetKernelArg(kernel, 3+i, sizeof streams[i], &streams[i]);
+  for (i = 0; i < 8; i++)
+      err |= clSetKernelArg(kernel, 3 + i, sizeof streams[i], &streams[i]);
 
-    if (err != CL_SUCCESS)
-    {
-        log_error("clSetKernelArgs failed\n");
-        return -1;
-    }
+  if (err != CL_SUCCESS)
+  {
+      log_error("clSetKernelArgs failed\n");
+      return -1;
+  }
 
     threads[0] = (unsigned int)img_width;
     threads[1] = (unsigned int)img_height;
@@ -182,18 +181,11 @@ int test_mri_one(cl_device_id device, cl_context context, cl_command_queue queue
 
     // cleanup
   clReleaseSampler(sampler);
-  for (i=0; i<8; i++)
-    clReleaseMemObject(streams[i]);
+  for (i = 0; i < 8; i++) clReleaseMemObject(streams[i]);
   clReleaseKernel(kernel);
   clReleaseProgram(program);
-  for (i=0; i<7; i++)
-    free(input_ptr[i]);
-    free(output_ptr);
+  for (i = 0; i < 7; i++) free(input_ptr[i]);
+  free(output_ptr);
 
-    return err;
+  return err;
 }
-
-
-
-
-

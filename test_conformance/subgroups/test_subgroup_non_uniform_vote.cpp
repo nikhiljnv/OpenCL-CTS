@@ -13,7 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-#include "procs.h"
 #include "subhelpers.h"
 #include "harness/typeWrappers.h"
 #include <set>
@@ -37,7 +36,7 @@ template <typename T, NonUniformVoteOp operation> struct VOTE
         int nw = test_params.local_workgroup_size;
         int ns = test_params.subgroup_size;
         int ng = test_params.global_workgroup_size;
-        int nj = (nw + ns - 1) / ns;
+        int nj = div_round_up(nw, ns);
         int non_uniform_size = ng % nw;
         ng = ng / nw;
         int last_subgroup_size = 0;
@@ -95,11 +94,10 @@ template <typename T, NonUniformVoteOp operation> struct VOTE
         int nw = test_params.local_workgroup_size;
         int ns = test_params.subgroup_size;
         int ng = test_params.global_workgroup_size;
-        int nj = (nw + ns - 1) / ns;
+        int nj = div_round_up(nw, ns);
         cl_int tr, rr;
         int non_uniform_size = ng % nw;
-        ng = ng / nw;
-        if (non_uniform_size) ng++;
+        ng = div_round_up(ng, nw);
         int last_subgroup_size = 0;
 
         for (k = 0; k < ng; ++k)
@@ -202,7 +200,7 @@ template <typename T, NonUniformVoteOp operation> struct VOTE
 };
 
 std::string sub_group_elect_source = R"(
-    __kernel void test_sub_group_elect(const __global Type *in, __global int4 *xy, __global Type *out) {
+    __kernel void test_sub_group_elect(const __global Type *in, __global int4 *xy, __global Type *out, uint4 work_item_mask_vector) {
         int gid = get_global_id(0);
         XY(xy,gid);
         uint subgroup_local_id = get_sub_group_local_id();
@@ -213,9 +211,9 @@ std::string sub_group_elect_source = R"(
         } else if(subgroup_local_id < 64) {
             work_item_mask = work_item_mask_vector.y;
         } else if(subgroup_local_id < 96) {
-            work_item_mask = work_item_mask_vector.w;
-        } else if(subgroup_local_id < 128) {
             work_item_mask = work_item_mask_vector.z;
+        } else if(subgroup_local_id < 128) {
+            work_item_mask = work_item_mask_vector.w;
         }
         if (elect_work_item & work_item_mask){
             out[gid] = sub_group_elect();
@@ -224,7 +222,7 @@ std::string sub_group_elect_source = R"(
 )";
 
 std::string sub_group_non_uniform_any_all_all_equal_source = R"(
-    __kernel void test_%s(const __global Type *in, __global int4 *xy, __global Type *out) {
+    __kernel void test_%s(const __global Type *in, __global int4 *xy, __global Type *out, uint4 work_item_mask_vector) {
         int gid = get_global_id(0);
         XY(xy,gid);
         uint subgroup_local_id = get_sub_group_local_id();
@@ -235,9 +233,9 @@ std::string sub_group_non_uniform_any_all_all_equal_source = R"(
         } else if(subgroup_local_id < 64) {
             work_item_mask = work_item_mask_vector.y;
         } else if(subgroup_local_id < 96) {
-            work_item_mask = work_item_mask_vector.w;
-        } else if(subgroup_local_id < 128) {
             work_item_mask = work_item_mask_vector.z;
+        } else if(subgroup_local_id < 128) {
+            work_item_mask = work_item_mask_vector.w;
         }
         if (elect_work_item & work_item_mask){
                 out[gid] = %s(in[gid]);
@@ -253,10 +251,7 @@ template <typename T> int run_vote_all_equal_for_type(RunTestForType rft)
 }
 }
 
-int test_subgroup_functions_non_uniform_vote(cl_device_id device,
-                                             cl_context context,
-                                             cl_command_queue queue,
-                                             int num_elements)
+REGISTER_TEST(subgroup_functions_non_uniform_vote)
 {
     if (!is_extension_available(device, "cl_khr_subgroup_non_uniform_vote"))
     {
@@ -265,15 +260,28 @@ int test_subgroup_functions_non_uniform_vote(cl_device_id device,
         return TEST_SKIPPED_ITSELF;
     }
 
-    constexpr size_t global_work_size = 170;
-    constexpr size_t local_work_size = 64;
-    WorkGroupParams test_params(global_work_size, local_work_size, true);
+    int error = 0;
+
+    // Non-uniform work-groups are an optional feature from 3.0 onward.
+    cl_bool device_supports_non_uniform_wg = CL_TRUE;
+    if (get_device_cl_version(device) >= Version(3, 0))
+    {
+        error = clGetDeviceInfo(
+            device, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT, sizeof(cl_bool),
+            &device_supports_non_uniform_wg, nullptr);
+        test_error(error, "clGetDeviceInfo failed");
+    }
+
+    const size_t global_work_size = device_supports_non_uniform_wg ? 170 : 192;
+    const size_t local_work_size = 64;
+
+    WorkGroupParams test_params(global_work_size, local_work_size, 3);
     test_params.save_kernel_source(
         sub_group_non_uniform_any_all_all_equal_source);
     test_params.save_kernel_source(sub_group_elect_source, "sub_group_elect");
     RunTestForType rft(device, context, queue, num_elements, test_params);
 
-    int error = run_vote_all_equal_for_type<cl_int>(rft);
+    error |= run_vote_all_equal_for_type<cl_int>(rft);
     error |= run_vote_all_equal_for_type<cl_uint>(rft);
     error |= run_vote_all_equal_for_type<cl_long>(rft);
     error |= run_vote_all_equal_for_type<cl_ulong>(rft);

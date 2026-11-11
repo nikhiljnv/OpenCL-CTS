@@ -11,5 +11,3 @@ set(${MODULE_NAME}_SOURCES
 )
 
 include(../CMakeCommon.txt)
-
-# end of file #

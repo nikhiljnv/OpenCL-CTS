@@ -21,12 +21,9 @@
 #endif
 
 #include "harness/testHarness.h"
-#include "harness/parseParameters.h"
 #include "utils.h"
-#include "procs.h"
 
 std::string gKernelName;
-int gWimpyMode = 0;
 
 test_status InitCL(cl_device_id device) {
   auto version = get_device_cl_version(device);
@@ -57,46 +54,38 @@ test_status InitCL(cl_device_id device) {
   return TEST_PASS;
 }
 
-test_definition test_list[] = {
-    ADD_TEST(device_info),           ADD_TEST(device_queue),
-    ADD_TEST(execute_block),         ADD_TEST(enqueue_block),
-    ADD_TEST(enqueue_nested_blocks), ADD_TEST(enqueue_wg_size),
-    ADD_TEST(enqueue_flags),         ADD_TEST(enqueue_multi_queue),
-    ADD_TEST(host_multi_queue),      ADD_TEST(enqueue_ndrange),
-    ADD_TEST(host_queue_order),      ADD_TEST(enqueue_profiling),
-};
+static test_status ParseArgs(int &argc, const char *argv[],
+                             std::vector<std::string> &removed_args,
+                             std::string &help)
+{
+    std::vector<const char *> argList;
+    for (int i = 0; i < argc; ++i)
+    {
+        if (strcmp(argv[i], "-kernelName") == 0)
+        {
+            if ((i + 1) > argc || argv[i + 1] == NULL)
+            {
+                vlog("Missing value for -kernelName argument\n");
+                return TEST_FAIL;
+            }
 
-const int test_num = ARRAY_SIZE( test_list );
+            gKernelName = std::string(argv[i + 1]);
+            removed_args.push_back(std::string(argv[i]) + " " + argv[i + 1]);
+        }
+        else
+        {
+            argList.push_back(argv[i]);
+        }
+    }
+    update_argc_argv_from_args_list(argList, argc, argv);
+
+    return TEST_PASS;
+}
 
 int main(int argc, const char *argv[])
 {
-    argc = parseCustomParam(argc, argv);
-
-    for (int i = 0; i < argc; ++i) {
-      int argsRemoveNum = 0;
-      if ( strcmp(argv[i], "-kernelName") == 0 ) {
-        if((i + 1) > argc && argv[i + 1] == NULL) {
-          vlog( "Missing value for -kernelName argument\n");
-          return -1;
-        }
-
-        gKernelName = std::string(argv[i + 1]);
-        argsRemoveNum += 2;
-      }
-     if (strcmp(argv[i], "-w") == 0 ){
-        gWimpyMode = 1;
-        argsRemoveNum += 1;
-     }
-
-
-      if (argsRemoveNum > 0) {
-        for (int j = i; j < (argc - argsRemoveNum); ++j)
-          argv[j] = argv[j + argsRemoveNum];
-
-        argc -= argsRemoveNum;
-        --i;
-      }
-    }
-
-    return runTestHarnessWithCheck(argc, argv, test_num, test_list, false, 0, InitCL);
+    return runTestHarnessWithCheckAndParse(
+        argc, argv, test_registry::getInstance().num_tests(),
+        test_registry::getInstance().definitions(), false, 0, InitCL,
+        ParseArgs);
 }

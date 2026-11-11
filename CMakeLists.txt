@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5.1)
+cmake_minimum_required(VERSION 3.12.0)
 
 set( CONFORMANCE_SUFFIX "" )
 set(CLConform_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
@@ -7,29 +7,54 @@ project(CLConform${CONFORMANCE_SUFFIX})
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_definitions(-DCL_TARGET_OPENCL_VERSION=300)
+add_definitions(-DCL_TARGET_OPENCL_VERSION=310)
 add_definitions(-DCL_USE_DEPRECATED_OPENCL_2_2_APIS=1)
 add_definitions(-DCL_USE_DEPRECATED_OPENCL_2_1_APIS=1)
 add_definitions(-DCL_USE_DEPRECATED_OPENCL_2_0_APIS=1)
 add_definitions(-DCL_USE_DEPRECATED_OPENCL_1_2_APIS=1)
 add_definitions(-DCL_USE_DEPRECATED_OPENCL_1_1_APIS=1)
 add_definitions(-DCL_USE_DEPRECATED_OPENCL_1_0_APIS=1)
+add_definitions(-DCL_NO_EXTENSION_PROTOTYPES)
+add_definitions(-DCL_ENABLE_BETA_EXTENSIONS)
 
 option(USE_CL_EXPERIMENTAL "Use Experimental definitions" OFF)
 if(USE_CL_EXPERIMENTAL)
   add_definitions(-DCL_EXPERIMENTAL)
 endif(USE_CL_EXPERIMENTAL)
 
+option(SANITIZER_ADDRESS "Build with the address sanitizer" OFF)
+option(SANITIZER_THREAD "Build with the thread sanitizer" OFF)
+option(SANITIZER_UNDEFINED "Build with the undefined behavior sanitizer" OFF)
+
+if (SANITIZER_ADDRESS AND SANITIZER_THREAD)
+    message(FATAL_ERROR "SANITIZER_ADDRESS and SANITIZER_THREAD cannot be enabled together.")
+endif()
+
+if (SANITIZER_ADDRESS)
+    add_compile_options(-fsanitize=address)
+    add_link_options(-fsanitize=address)
+elseif (SANITIZER_THREAD)
+    add_compile_options(-fsanitize=thread)
+    add_link_options(-fsanitize=thread)
+endif()
+
+if (SANITIZER_UNDEFINED)
+    add_compile_options(-fsanitize=undefined)
+    add_link_options(-fsanitize=undefined)
+endif (SANITIZER_UNDEFINED)
+
 #-----------------------------------------------------------
 # Default Configurable Test Set
 #-----------------------------------------------------------
 option(D3D10_IS_SUPPORTED "Run DirectX 10 interop tests" OFF)
 option(D3D11_IS_SUPPORTED "Run DirectX 11 interop tests" OFF)
+option(D3D12_IS_SUPPORTED "Run DirectX 12 interop tests" OFF)
 option(GL_IS_SUPPORTED "Run OpenGL interop tests" OFF)
 option(GLES_IS_SUPPORTED "Run OpenGL ES interop tests" OFF)
+option(VULKAN_IS_SUPPORTED "Run Vulkan interop tests" OFF)
 
 
 #-----------------------------------------------------------
@@ -56,6 +81,12 @@ else(CL_INCLUDE_DIR AND CL_LIB_DIR)
     message(FATAL_ERROR "Either install OpenCL or pass -DCL_INCLUDE_DIR and -DCL_LIB_DIR")
 endif(CL_INCLUDE_DIR AND CL_LIB_DIR)
 
+# SPIRV_INCLUDE_DIR - path to dir with SPIR-V headers
+if(NOT SPIRV_INCLUDE_DIR)
+    message(STATUS "SPIR-V headers haven't been found!")
+    message(FATAL_ERROR "Pass -DSPIRV_INCLUDE_DIR")
+endif(NOT SPIRV_INCLUDE_DIR)
+
 # CLConform_GL_LIBRARIES_DIR - path to OpenGL libraries
 if(GL_IS_SUPPORTED AND CLConform_GL_LIBRARIES_DIR)
     link_directories(${CLConform_GL_LIBRARIES_DIR})
@@ -65,14 +96,17 @@ include(CheckFunctionExists)
 include(CheckIncludeFiles)
 include(CheckCXXCompilerFlag)
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm.*|ARM.*)")
-    set(CLConform_TARGET_ARCH ARM)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64.*|AARCH64.*|arm64.*|ARM64.*)")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64.*|AARCH64.*|arm64.*|ARM64.*)" OR
+   CMAKE_VS_PLATFORM_NAME MATCHES "^(aarch64.*|AARCH64.*|arm64.*|ARM64.*)")
     set(CLConform_TARGET_ARCH ARM64)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm.*|ARM.*)")
+    set(CLConform_TARGET_ARCH ARM)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "amd64.*|x86_64.*|AMD64.*")
     set(CLConform_TARGET_ARCH x86_64)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "i686.*|i386.*|x86.*")
     set(CLConform_TARGET_ARCH x86)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "riscv.*")
+    set(CLConform_TARGET_ARCH RISCV)
 endif()
 
 if(NOT DEFINED CLConform_TARGET_ARCH)
@@ -81,20 +115,36 @@ endif()
 
 macro(add_cxx_flag_if_supported flag)
     string(REGEX REPLACE "[-=+]" "" FLAG_NO_SIGNS ${flag})
-    check_cxx_compiler_flag(${flag} COMPILER_SUPPORTS_${FLAG_NO_SIGNS})
+    set(FLAG_TO_TEST ${flag})
+    if((${flag} MATCHES "^-Wno-") AND NOT (${flag} MATCHES "^-Wno-error="))
+        # -Wno-... only causes a diagnostic if another diagnostic is emitted.
+        # Change such flags into a -W... flag to test if the warning is known.
+        string(REGEX REPLACE "^-Wno-" "-W" FLAG_TO_TEST ${flag})
+    endif()
+    check_cxx_compiler_flag(${FLAG_TO_TEST} COMPILER_SUPPORTS_${FLAG_NO_SIGNS})
     if(COMPILER_SUPPORTS_${FLAG_NO_SIGNS})
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${flag}")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${flag}")
     endif()
 endmacro(add_cxx_flag_if_supported)
 
 if(CMAKE_COMPILER_IS_GNUCC OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "(Apple)?Clang")
-    add_cxx_flag_if_supported(-Wno-narrowing)
-    add_cxx_flag_if_supported(-Wno-format)
-    add_cxx_flag_if_supported(-Werror)
+    add_cxx_flag_if_supported(-Wmisleading-indentation)
+    add_cxx_flag_if_supported(-Wunused-function)
+    add_cxx_flag_if_supported(-Wunused-variable)
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+      set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
+    else()
+      add_cxx_flag_if_supported(-Werror)
+    endif()
+    if(NOT CMAKE_BUILD_TYPE MATCHES "Release|RelWithDebInfo|MinSizeRel")
+        # Enable more warnings if not doing a release build.
+        add_cxx_flag_if_supported(-Wall)
+    endif()
     add_cxx_flag_if_supported(-Wno-error=cpp) # Allow #warning directive
-    add_cxx_flag_if_supported(-Wno-error=unknown-pragmas) # Issue #785
+    add_cxx_flag_if_supported(-Wno-unknown-pragmas) # Issue #785
     add_cxx_flag_if_supported(-Wno-error=asm-operand-widths) # Issue #784
-    add_cxx_flag_if_supported(-Wno-error=implicit-const-int-float-conversion) # Issue #1250
+    add_cxx_flag_if_supported(-Wno-strict-aliasing)  # Issue 2234
+    add_cxx_flag_if_supported(-Wno-error=template-body)  # GCC 16 libstdc++ bug
 
     # -msse -mfpmath=sse to force gcc to use sse for float math,
     # avoiding excess precision problems that cause tests like int2float
@@ -108,9 +158,30 @@ if(CMAKE_COMPILER_IS_GNUCC OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "(Apple)?Clang"
         add_cxx_flag_if_supported(-frounding-math)
     endif()
 else()
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /D__SSE__")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D__SSE__")
+    # Curb the inclusion of SSE headers when compiling for non x86 targets
+    if(${CLConform_TARGET_ARCH} STREQUAL "x86_64" OR ${CLConform_TARGET_ARCH}
+            STREQUAL "x86")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /D__SSE__")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /D__SSE__")
+    endif()
 endif()
+
+# Set a module's COMPILE_FLAGS if using gcc or clang.
+macro(set_gnulike_module_compile_flags flags)
+    if(CMAKE_COMPILER_IS_GNUCC OR "${CMAKE_CXX_COMPILER_ID}" MATCHES "(Apple)?Clang")
+        SET_SOURCE_FILES_PROPERTIES(
+            ${${MODULE_NAME}_SOURCES}
+            PROPERTIES
+            COMPILE_FLAGS ${flags}
+        )
+    endif()
+endmacro(set_gnulike_module_compile_flags)
+
+# Xcode 14.1 deprecated functions such as sprintf.
+# Suppress such warnings for now, see Issue #1626
+if(APPLE)
+    add_cxx_flag_if_supported(-Wno-deprecated-declarations)
+endif(APPLE)
 
 if(MSVC)
     # Don't warn when using standard non-secure functions.
@@ -122,8 +193,19 @@ if(MSVC)
 endif()
 
 if( WIN32 AND "${CMAKE_CXX_COMPILER_ID}" MATCHES "Intel" )
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Qlong-double -Qpc80 /DWIN32 /D_WINDOWS /W3 /GR /EHsc -nologo -Od -D_CRT_NONSTDC_NO_WARNINGS -EHsc -Wall -Qdiag-disable:68,111,177,186,161,869,1028,2259,2553,181,239,265,1188 -fp:strict -fp:source")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Qlong-double -Qpc80 /DWIN32 /D_WINDOWS /W3 /GR /EHsc -nologo -Od -D_CRT_NONSTDC_NO_WARNINGS -EHsc -Wall -Qdiag-disable:68,111,177,186,161,869,1028,2259,2553,181,239,265,1188 -fp:strict -fp:source")
+    set(Shared_Flags_Intel "-Qlong-double -Qpc80 /DWIN32 /D_WINDOWS /W3 /GR /EHsc -nologo -Od -D_CRT_NONSTDC_NO_WARNINGS -EHsc -Wall -fp:strict")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${Shared_Flags_Intel}")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${Shared_Flags_Intel}")
+    if (NOT ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "IntelLLVM"))
+        set(ICC_Extra_Flags "-Qdiag-disable:68,111,177,186,161,869,1028,2259,2553,181,239,265,1188 -fp:source")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ICC_Extra_Flags}")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ICC_Extra_Flags}")
+    endif()
+endif()
+
+# To handle addresses larger than 2 gigabytes for 32bit targets
+if(WIN32 AND ${CLConform_TARGET_ARCH} STREQUAL "x86")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /LARGEADDRESSAWARE")
 endif()
 
 list(APPEND CLConform_LIBRARIES ${OPENCL_LIBRARIES})
@@ -149,6 +231,7 @@ if(APPLE)
 endif(APPLE)
 
 include_directories(SYSTEM ${CL_INCLUDE_DIR})
+include_directories(SYSTEM ${SPIRV_INCLUDE_DIR}/include)
 include_directories(${CLConform_SOURCE_DIR}/test_common/harness
                     ${CLConform_SOURCE_DIR}/test_common/gles
                     ${CLConform_SOURCE_DIR}/test_common/gl
